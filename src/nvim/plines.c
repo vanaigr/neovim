@@ -109,7 +109,7 @@ CSType init_charsize_arg(CharsizeArg *csarg, win_T *wp, linenr_T lnum, char *lin
   }
 }
 
-/// Get the number of cells taken up on the screen for the given arguments.
+/// Get the number of characters taken up on the screen for the given csarg and position.
 /// "csarg->cur_text_width_left" and "csarg->cur_text_width_right" are set
 /// to the extra size for inline virtual text.
 ///
@@ -277,47 +277,74 @@ CharSize charsize_regular(CharsizeArg *csarg, char *const cur, colnr_T const vco
     size += added;
   }
 
-  bool need_lbr = false;
-  // If 'linebreak' set check at a blank before a non-blank if the line
-  // needs a break here.
-  if (wp->w_p_lbr && wp->w_p_wrap && wp->w_width_inner != 0
-      && vim_isbreak((uint8_t)cur[0]) && !vim_isbreak((uint8_t)cur[1])) {
-    char *t = csarg->line;
-    while (vim_isbreak((uint8_t)t[0])) {
-      t++;
-    }
-    // 'linebreak' is only needed when not in leading whitespace.
-    need_lbr = cur >= t;
-  }
-  if (need_lbr) {
-    char *s = cur;
-    // Count all characters from first non-blank after a blank up to next
-    // non-blank after a blank.
-    int numberextra = win_col_off(wp);
-    colnr_T col_adj = size - 1;
-    colnr_T colmax = (colnr_T)(wp->w_width_inner - numberextra - col_adj);
-    if (vcol >= colmax) {
-      colmax += col_adj;
-      int n = colmax + win_col_off2(wp);
-      if (n > 0) {
-        colmax += (((vcol - colmax) / n) + 1) * n - col_adj;
+  if (wp->w_p_wrap && wp->w_p_lbr && vim_isbreak((uint8_t)cur[0])
+      && !vim_isbreak((uint8_t)cur[1])) {
+    int const width = wp->w_width_inner - win_col_off(wp);
+    int const width2 = width + win_col_off2(wp);
+
+    int cur_vcol = vcol + size;  // start of the word (next character)
+
+    bool can_break;
+    int colmax;
+    if (width <= 0 || cur_vcol == width) {
+      can_break = false;
+    } else if (cur_vcol < width) {
+      can_break = true;
+      colmax = width;
+    } else {
+      assert(width2 != 0);  // win_col__off2() >= 0, width > 0
+
+      int const line_count = (cur_vcol - width) / width2;
+      int const line_vcol = (cur_vcol - width) % width2;
+      if (line_vcol == 0) {  // next char is at the start of the line
+        can_break = false;
+      } else {
+        can_break = true;
+        colmax = width + (line_count + 1) * width2;
       }
     }
 
-    colnr_T vcol2 = vcol;
-    while (true) {
-      char *ps = s;
-      MB_PTR_ADV(s);
-      int c = (uint8_t)(*s);
-      if (!(c != NUL
-            && (vim_isbreak(c) || vcol2 == vcol || !vim_isbreak((uint8_t)(*ps))))) {
-        break;
+    if (can_break) {
+      assert(width2 != 0);
+
+      int indent_width = csarg->indent_width;
+      if (indent_width == INT_MIN) {
+        indent_width = 0;
+        if (*sbr != NUL) {
+          indent_width += vim_strsize(sbr);
+        }
+        if (wp->w_p_bri) {
+          indent_width += get_breakindent_win(wp, line);
+        }
+        csarg->indent_width = indent_width;
       }
 
-      vcol2 += win_chartabsize(wp, s, vcol2);
-      if (vcol2 >= colmax) {  // doesn't fit
-        size = colmax - vcol + col_adj;
-        break;
+      can_break = (width2 - indent_width) > (colmax - cur_vcol);
+    }
+
+    if (can_break) {
+      int const start_vcol = cur_vcol;
+
+      // Current character has to be decoded the second time
+      // here since its length is not passed to this function.
+      StrCharInfo sci = utf_ptr2StrCharInfo(cur);
+      bool prev_break = true;
+
+      // Count all characters from first non-blank after a blank up to next
+      // non-blank after a blank.
+      // note: doesn't consider inline virtual text
+      while (true) {
+        sci = utfc_next(sci);
+        bool const cur_break = vim_isbreak((uint8_t)(*sci.ptr));
+        if (*sci.ptr == NUL || (prev_break && !cur_break && cur_vcol != start_vcol)) {
+          break;
+        }
+        prev_break = cur_break;
+        cur_vcol += win_chartabsize(wp, sci.ptr, cur_vcol);
+        if (cur_vcol > colmax) {
+          size = colmax - vcol;
+          break;
+        }
       }
     }
   }

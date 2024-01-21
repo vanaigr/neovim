@@ -107,9 +107,6 @@ typedef struct {
   int filler_lines;          ///< nr of filler lines to be drawn
   int filler_todo;           ///< nr of filler lines still to do + 1
   SignTextAttrs sattrs[SIGN_SHOW_MAX];  ///< sign attributes for the sign column
-  /// do consider wrapping in linebreak mode only after encountering
-  /// a non whitespace char
-  bool need_lbr;
 
   VirtText virt_inline;
   size_t virt_inline_i;
@@ -885,7 +882,6 @@ static void win_line_start(win_T *wp, winlinevars_T *wlv)
 {
   wlv->col = 0;
   wlv->off = 0;
-  wlv->need_lbr = false;
   for (int i = 0; i < wp->w_grid.cols; i++) {
     linebuf_char[i] = schar_from_ascii(' ');
     linebuf_attr[i] = -1;
@@ -2077,18 +2073,8 @@ int win_line(win_T *wp, linenr_T lnum, int startrow, int endrow, int col_rows, s
           wlv.char_attr = hl_combine_attr(term_attrs[wlv.vcol], wlv.char_attr);
         }
 
-        // we don't want linebreak to apply for lines that start with
-        // leading spaces, followed by long letters (since it would add
-        // a break at the beginning of a line and this might be unexpected)
-        //
-        // So only allow to linebreak, once we have found chars not in
-        // 'breakat' in the line.
-        if (wp->w_p_lbr && !wlv.need_lbr && mb_schar != NUL
-            && !vim_isbreak((uint8_t)(*ptr))) {
-          wlv.need_lbr = true;
-        }
         // Found last space before word: check for line break.
-        if (wp->w_p_lbr && c0 == mb_c && mb_c < 128 && wlv.need_lbr
+        if (is_wrapped && wp->w_p_lbr && c0 == mb_c && mb_c < 128
             && vim_isbreak(mb_c) && !vim_isbreak((uint8_t)(*ptr))) {
           int mb_off = utf_head_off(line, ptr - 1);
           char *p = ptr - (mb_off + 1);
