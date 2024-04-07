@@ -128,3 +128,21 @@ static inline StrCharInfo utf_ptr2StrCharInfo(char *ptr)
 {
   return (StrCharInfo){ .ptr = ptr, .chr = utf_ptr2CharInfo(ptr) };
 }
+
+#include"grid.h"
+
+static inline ScharInfo utfc_ptr2ScharInfo(char const *p)
+  REAL_FATTR_NONNULL_ALL REAL_FATTR_ALWAYS_INLINE;
+
+static inline ScharInfo utfc_ptr2ScharInfo(char const *p)
+{
+  if (EXPECT(p[0] > 0 && p[1] >= 0, true)) {
+    return (ScharInfo){
+      .first_value = p[0],
+      .schar = schar_from_ascii(p[0]),
+      .len = 1,
+    };
+  } else {
+    return utfc_ptr2ScharInfo_impl(p);
+  }
+}

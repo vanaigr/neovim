@@ -63,6 +63,12 @@ typedef struct {
 } CharInfo;
 
 typedef struct {
+  int32_t first_value;
+  schar_T schar;
+  int len;
+} ScharInfo;
+
+typedef struct {
   char *ptr;     ///< Pointer to the first byte of the character.
   CharInfo chr;  ///< Information about the character.
 } StrCharInfo;

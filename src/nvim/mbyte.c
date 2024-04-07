@@ -815,17 +815,50 @@ bool utf_char_composinglike(int32_t const first, int32_t const next)
   return utf_iscomposing(next) || arabic_combine(first, next);
 }
 
-/// Get the screen char at the beginning of a string
-///
-/// Caller is expected to check for things like unprintable chars etc
-/// If first char in string is a composing char, prepend a space to display it correctly.
-///
-/// If "p" starts with an invalid sequence, zero is returned.
-///
-/// @param[out] firstc (required) The first codepoint of the screen char,
-///                    or the first byte of an invalid sequence
-///
-/// @return the char
+ScharInfo utfc_ptr2ScharInfo_impl(char const *p_in)
+{
+  uint8_t const *const p = (uint8_t const *)p_in;
+  if (*p == NUL) {
+    return (ScharInfo){ 0 };
+  }
+
+  int first_len;
+  int32_t first_value;
+  bool first_compose;
+  if (*p < 0x80U) {
+    first_len = 1;
+    first_value = *p;
+    first_compose = false;
+  } else {
+    first_len = utf8len_tab[*p];
+    first_value = utf_ptr2CharInfo_impl(p, first_len);
+    if (first_value < 0) {
+      return (ScharInfo){ .first_value = *p, .schar = 0, .len = 1 };
+    }
+    first_compose = utf_iscomposing(first_value);
+  }
+
+  int const maxlen = MAX_SCHAR_SIZE - 1 - first_compose;
+  assert(maxlen > first_len);
+
+  int schar_len = first_len;
+  int len = first_len;
+  int32_t cur_value = first_value;
+  while(p[len] >= 0x80U) {
+    int next_len = utf8len_tab[p[len]];
+    int32_t next_value = utf_ptr2CharInfo_impl(p + len, next_len);
+    if (!utf_char_composinglike(cur_value, next_value)) {
+      break;
+    }
+    len += next_len;
+    schar_len = len <= maxlen ? len : schar_len;
+    cur_value = next_value;
+  }
+
+  schar_T schar = schar_from_buf_first(p_in, schar_len, first_compose);
+  return (ScharInfo){ .first_value = first_value, .schar = schar, .len = len };
+}
+
 schar_T utfc_ptr2schar(const char *p, int *firstc)
   FUNC_ATTR_NONNULL_ALL
 {

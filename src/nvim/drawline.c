@@ -1486,6 +1486,7 @@ int win_line(win_T *wp, linenr_T lnum, int startrow, int endrow, int col_rows, s
   int virt_line_index;
   int virt_line_offset = -1;
   // Repeat for the whole displayed line.
+  int b0 = 0, b1 = 0, b2 = 0;
   while (true) {
     int has_match_conc = 0;  ///< match wants to conceal
     int decor_conceal = 0;
@@ -1806,13 +1807,18 @@ int win_line(win_T *wp, linenr_T lnum, int startrow, int endrow, int col_rows, s
     // For the '$' of the 'list' option, n_extra == 1, p_extra == "".
     if (wlv.n_extra > 0) {
       if (wlv.sc_extra != NUL || (wlv.n_extra == 1 && wlv.sc_final != NUL)) {
+	b0++;
         mb_schar = (wlv.n_extra == 1 && wlv.sc_final != NUL) ? wlv.sc_final : wlv.sc_extra;
         mb_c = schar_get_first_codepoint(mb_schar);
         wlv.n_extra--;
       } else {
         assert(wlv.p_extra != NULL);
-        mb_l = utfc_ptr2len(wlv.p_extra);
-        mb_schar = utfc_ptr2schar(wlv.p_extra, &mb_c);
+
+	ScharInfo mb_si = utfc_ptr2ScharInfo(wlv.p_extra);
+	mb_l = mb_si.len;
+	mb_c = mb_si.first_value;
+	mb_schar = mb_si.schar;
+
         // mb_l=0 at the end-of-line NUL
         if (mb_l > wlv.n_extra || mb_l == 0) {
           mb_l = 1;
@@ -1880,8 +1886,14 @@ int win_line(win_T *wp, linenr_T lnum, int startrow, int endrow, int col_rows, s
       }
 
       // Get a character from the line itself.
-      mb_l = utfc_ptr2len(ptr);
-      mb_schar = utfc_ptr2schar(ptr, &mb_c);
+      //mb_l = utfc_ptr2len(ptr);
+      //mb_schar = utfc_ptr2schar(ptr, &mb_c);
+
+      b2++;
+      ScharInfo mb_si = utfc_ptr2ScharInfo(ptr);
+      mb_c = mb_si.first_value;
+      mb_schar = mb_si.schar;
+      mb_l = mb_si.len;
 
       // Overlong encoded ASCII or ASCII with composing char
       // is displayed normally, except a NUL.
