@@ -2034,6 +2034,17 @@ function vim.api.nvim_set_var(name, value) end
 --- @param value any Variable value
 function vim.api.nvim_set_vvar(name, value) end
 
+--- Reverse utf8 string {str}. Composing and combining characters are
+--- considered a part of the base character, unless {code_points} is true.
+---
+--- @param str string String to reverse.
+--- @param opts vim.api.keyset.string_reverse Optional parameters.
+---             • code_points (boolean, default false): treat individual
+---               codepoints (e.g. composing and combining characters) as
+---               separate characters.
+--- @return string
+function vim.api.nvim_string_reverse(str, opts) end
+
 --- Calculates the number of display cells occupied by `text`. Control
 --- characters including <Tab> count as one cell.
 ---

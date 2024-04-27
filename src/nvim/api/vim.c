@@ -2305,3 +2305,25 @@ Dictionary nvim_complete_set(Integer index, Dict(complete_set) *opts, Arena *are
   }
   return rv;
 }
+
+/// Reverse utf8 string {str}. Composing and combining characters
+/// are considered a part of the base character, unless {code_points} is true.
+///
+/// @param str   String to reverse.
+/// @param opts  Optional parameters.
+///       - code_points (boolean, default false): treat individual codepoints
+///         (e.g. composing and combining characters) as separate characters.
+String nvim_string_reverse(String str, Dict(string_reverse) *opts, Arena *arena)
+  FUNC_API_SINCE(12)
+{
+  bool code_points = false;
+  if (HAS_KEY(opts, string_reverse, code_points)) {
+    code_points = opts->code_points;
+  }
+
+  assert(sizeof(str.data[0]) == 1);
+  char *out_str = arena_alloc(arena, str.size, false);
+  utf_str_reverse(str.data, out_str, str.size, code_points);
+
+  return cbuf_as_string(out_str, str.size);
+}

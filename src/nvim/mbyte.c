@@ -595,6 +595,76 @@ ret:
 #undef CHECK
 }
 
+/// Convert a UTF-8 byte sequence to a Unicode code point.
+/// Handles ascii, multibyte sequences and illegal sequences.
+///
+/// @param[in]  p_in  String to convert.
+/// @param[in]  end   Pointer to one-past-end of the string.
+///
+/// @return information about the character. When the sequence is illegal,
+/// "value" is negative, "len" is 1.
+CharInfo utf_ptr2CharInfo_end(char const *p_in, char const *end)
+  FUNC_ATTR_PURE FUNC_ATTR_NONNULL_ALL FUNC_ATTR_WARN_UNUSED_RESULT
+{
+  assert(p_in < end);
+  uint8_t const *const p = (uint8_t const *)p_in;
+  if (*p < 0x80) {
+    return (CharInfo){ .value = *p, .len = 1 };
+  } else {
+    uint8_t len = utf8len_tab[*p];
+    int32_t code_point;
+    if (end - p_in < len) {
+      code_point = -1;
+    } else {
+      code_point = utf_ptr2CharInfo_impl(p, len);
+    }
+    len = code_point < 0 ? 1 : len;
+
+    return (CharInfo){ .value = code_point, .len = len };
+  }
+}
+
+/// Return information about the next character.
+/// Composing and combining characters are
+/// considered a part of the current character.
+///
+/// @param[in]  cur     Information about the current character in the string.
+/// @param[in]  end_in  Pointer to one-past-end of the string.
+StrCharInfo utfc_next_end(StrCharInfo cur, char const *end_in)
+  FUNC_ATTR_PURE FUNC_ATTR_NONNULL_ALL FUNC_ATTR_WARN_UNUSED_RESULT
+{
+  uint8_t const *end = (uint8_t const *)end_in;
+  int32_t prev_code = cur.chr.value;
+  uint8_t const *next = (uint8_t const *)(cur.ptr + cur.chr.len);
+  assert(next <= end);
+
+  while (true) {
+    uint8_t byte = next >= end ? 0 : *next;
+    if (byte < 0x80U) {
+      return (StrCharInfo){
+        .ptr = (char *)next,
+        .chr = (CharInfo){ .value = byte, .len = 1 },
+      };
+    }
+    uint8_t len = utf8len_tab[byte];
+    int32_t next_code;
+    if (end - next < len) {
+      next_code = -1;
+    } else {
+      next_code = utf_ptr2CharInfo_impl(next, len);
+    }
+    if (!utf_char_composinglike(prev_code, next_code)) {
+      return (StrCharInfo){
+        .ptr = (char *)next,
+        .chr = (CharInfo){ .value = next_code, .len = (next_code < 0 ? 1 : len) },
+      };
+    }
+
+    prev_code = next_code;
+    next += len;
+  }
+}
+
 /// Like utf_ptr2cells(), but limit string length to "size".
 /// For an empty string or truncated character returns 1.
 int utf_ptr2cells_len(const char *p, int size)
@@ -1634,6 +1704,64 @@ int mb_strnicmp(const char *s1, const char *s2, const size_t nn)
 int mb_stricmp(const char *s1, const char *s2)
 {
   return mb_strnicmp(s1, s2, MAXCOL);
+}
+
+/// Reverse utf8 string "str". Handles multibyte characters.
+/// Composing and combining characters are considered a part
+/// of the base character, unless "code_points" is true.
+/// Input string does not need to be NUL-terminated, and can contain
+/// embedded NUL bytes. NUL is not appended to the output string.
+///
+/// @param[in]  str_in  String to reverse.
+/// @param[out] out     Output buffer of length at least "str_len".
+/// @param str_len      Length of the string to reverse.
+/// @param code_points  Whether to treat individual codepoints
+///                     (E.g. composing and combining characters)
+///                     as separate characters.
+void utf_str_reverse(char const *str_in, char *restrict out, size_t str_len, bool code_points)
+  FUNC_ATTR_NONNULL_ALL
+{
+  char const *str = str_in;
+  char const *const str_end = str + str_len;
+  char const *const str_begin = str;
+
+  out += str_len;
+  // be quick for ascii
+  while (str < str_end && *str >= 0) {
+    *--out = *str++;
+  }
+  if (str >= str_end) {
+    return;
+  }
+
+  if (code_points) {
+    while (str < str_end) {
+      CharInfo ci = utf_ptr2CharInfo_end(str, str_end);
+      out -= ci.len;
+      memcpy(out, str, (size_t)ci.len);
+      str += ci.len;
+    }
+  } else {
+    // current char might be composing and the base char
+    // would need to be reversed differently
+    if (str > str_begin) {
+      str--;
+      out++;
+    }
+
+    StrCharInfo sci = (StrCharInfo){
+      .ptr = (char *)str,
+      .chr = utf_ptr2CharInfo_end(str, str_end),
+    };
+
+    while (sci.ptr < str_end) {
+      StrCharInfo next = utfc_next_end(sci, str_end);
+      size_t len = (size_t)(next.ptr - sci.ptr);
+      out -= len;
+      memcpy(out, sci.ptr, len);
+      sci = next;
+    }
+  }
 }
 
 // "g8": show bytes of the UTF-8 char under the cursor.  Doesn't matter what

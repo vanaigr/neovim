@@ -375,3 +375,8 @@ typedef struct {
   Boolean ignore_blank_lines;
   Boolean indent_heuristic;
 } Dict(xdl_diff);
+
+typedef struct {
+  OptionalKeys is_set__string_reverse_;
+  Boolean code_points;
+} Dict(string_reverse);

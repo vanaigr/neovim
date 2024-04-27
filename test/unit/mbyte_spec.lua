@@ -273,4 +273,130 @@ describe('mbyte', function()
       eq(expected_offsets, { b = b_offsets, e = e_offsets })
     end)
   end)
+
+  describe('utf_ptr2CharInfo_end', function()
+    local function test(str, expected, len)
+      local cstr = t.to_cstr(str)
+      len = len or #str
+
+      local result_values = {}
+      local result_lengths = {}
+      local i = 0
+      while i < len do
+        local result = lib.utf_ptr2CharInfo_end(cstr + i, cstr + len)
+        table.insert(result_values, result.value >= 0 and result.value or -1)
+        table.insert(result_lengths, result.len)
+        i = i + result.len
+      end
+
+      eq(expected, { v = result_values, l = result_lengths })
+    end
+
+    itp('works for valid string', function()
+      test('iÀⱠ𐀀', { v = { 105, 192, 11360, 65536 }, l = { 1, 2, 3, 4 } })
+    end)
+
+    itp('for string with incomplete sequence', function()
+      test('i\195À\226\177Ⱡ\240\144\128', {
+        v = { 105, -1, 192, -1, -1, 11360, -1, -1, -1 },
+        l = { 1, 1, 2, 1, 1, 3, 1, 1, 1 },
+      })
+    end)
+
+    itp('works for composing characters', function()
+      test('a\204\144b', { v = { 97, 784, 98 }, l = { 1, 2, 1 } })
+      test('ĸ\204\144Δ', { v = { 312, 784, 916 }, l = { 2, 2, 2 } })
+    end)
+
+    itp('does not read past the end', function()
+      test('Ⱡ', { v = { -1, -1 }, l = { 1, 1 } }, 2)
+    end)
+  end)
+
+  describe('utfc_next_end', function()
+    local function test(str, expected, len)
+      local cstr = t.to_cstr(str)
+      local max = cstr + (len or #str)
+      assert((len or #str) > 0)
+
+      local cur = { ptr = cstr, chr = lib.utf_ptr2CharInfo_end(cstr, max) }
+      local result_values = { cur.chr.value }
+      local result_lengths = { cur.chr.len }
+      local result_offsets = { cur.ptr - cstr }
+      while cur.ptr < max do
+        local next = lib.utfc_next_end(cur, max)
+        local result = next.chr
+        table.insert(result_values, result.value >= 0 and result.value or -1)
+        table.insert(result_lengths, result.len)
+        table.insert(result_offsets, next.ptr - cstr)
+        cur = next
+      end
+
+      eq(expected, { v = result_values, l = result_lengths, o = result_offsets })
+    end
+
+    itp('works for valid string', function()
+      test('iÀⱠ𐀀', {
+        v = { 105, 192, 11360, 65536, 0 },
+        l = { 1, 2, 3, 4, 1 },
+        o = { 0, 1, 3, 6, 10 },
+      })
+    end)
+
+    itp('for string with incomplete sequences', function()
+      test('i\195À\226\177Ⱡ\240\144\128', {
+        v = { 105, -1, 192, -1, -1, 11360, -1, -1, -1, 0 },
+        l = { 1, 1, 2, 1, 1, 3, 1, 1, 1, 1 },
+        o = { 0, 1, 2, 4, 5, 6, 9, 10, 11, 12 },
+      })
+    end)
+
+    itp('works for composing characters', function()
+      test('a\204\144b', { v = { 97, 98, 0 }, l = { 1, 1, 1 }, o = { 0, 3, 4 } })
+      test('ĸ\204\144Δ', { v = { 312, 916, 0 }, l = { 2, 2, 1 }, o = { 0, 4, 6 } })
+      test('b\204\144ĸ\204\188\204\165', {
+        v = { 98, 312, 0 },
+        l = { 1, 2, 1 },
+        o = { 0, 3, 9 },
+      })
+    end)
+
+    itp('does not read past the end', function()
+      test('abc', { v = { 97, 98, 0 }, l = { 1, 1, 1 }, o = { 0, 1, 2 } }, 2)
+      test('Ⱡ', { v = { -1, -1, 0 }, l = { 1, 1, 1 }, o = { 0, 1, 2 } }, 2)
+      test('a\204\144', { v = { 97, -1, 0 }, l = { 1, 1, 1 }, o = { 0, 1, 2 } }, 2)
+      test('ĸ\204\144', { v = { 312, -1, 0 }, l = { 2, 1, 1 }, o = { 0, 2, 3 } }, 3)
+    end)
+  end)
+
+  describe('utf_str_reverse', function()
+    local function printable(str)
+      return {
+        str = str,
+        codes = str:gsub('.', function(c)
+          return string.format('\\%03d', string.byte(c))
+        end),
+      }
+    end
+
+    local function test(str, expected)
+      local len = #str - 1
+      local cstr = t.to_cstr(str)
+      local result1 = ffi.new('char[?]', len + 1)
+      local result2 = ffi.new('char[?]', len + 1)
+      lib.utf_str_reverse(cstr, result1, len, false)
+      lib.utf_str_reverse(cstr, result2, len, true)
+      result1[len] = 0
+      result2[len] = 0
+      eq(printable(expected), printable(ffi.string(result1)))
+      eq(printable(expected), printable(ffi.string(result2)))
+    end
+
+    itp('does not read past the end', function()
+      test('abc', 'ba')
+      test('Ⱡ', '\177\226')
+      test('a\204\144', '\204a')
+      test('ĸ\204\144', '\204ĸ')
+    end)
+  end)
 end)

@@ -5016,4 +5016,67 @@ describe('API', function()
       eq(false, exec_lua('return _G.success'))
     end)
   end)
+
+  describe('nvim_string_reverse', function()
+    local function printable(str)
+      return {
+        str = str,
+        codes = str:gsub('.', function(c)
+          return string.format('\\%03d', string.byte(c))
+        end),
+      }
+    end
+
+    local function test(str, expected)
+      local result1 = api.nvim_string_reverse(str, {})
+      local result2 = api.nvim_string_reverse(str, { code_points = true })
+      eq(printable(expected), printable(result1))
+      eq(printable(expected), printable(result2))
+    end
+
+    it('works for ascii string', function()
+      test('abcde fghij', 'jihgf edcba')
+    end)
+    it('works for multiple string', function()
+      test('ΑΒΓΔ ΕΖΗΘ', 'ΘΗΖΕ ΔΓΒΑ')
+    end)
+    it('works for string with incomplete sequences', function()
+      test('i\195À\226\177Ⱡ\240\144\128', '\128\144\240Ⱡ\177\226À\195i')
+    end)
+
+    it('works for strings with embedded NUL', function()
+      test('a\0c', 'c\0a')
+      test('a\0', '\0a')
+      test('ĸ\0Ⱡ', 'Ⱡ\0ĸ')
+      test('ĸ\0', '\0ĸ')
+    end)
+
+    local function test2(str, expected, expected_separate)
+      local result = api.nvim_string_reverse(str, {})
+      local result_separate = api.nvim_string_reverse(str, { code_points = true })
+      eq(printable(expected), printable(result))
+      eq(printable(expected_separate), printable(result_separate))
+    end
+
+    it('works for composing characters', function()
+      test2('a\204\144b', 'ba\204\144', 'b\204\144a')
+      test2('ĸ\204\144Δ', 'Δĸ\204\144', 'Δ\204\144ĸ')
+      test2(
+        'Ⱡb\204\144\204\165ĸ\204\188\204\165',
+        'ĸ\204\188\204\165b\204\144\204\165Ⱡ',
+        '\204\165\204\188ĸ\204\165\204\144bⱠ'
+      )
+    end)
+
+    local function test3(str)
+      local result1 = api.nvim_string_reverse(str, {})
+      local result2 = api.nvim_string_reverse(str, { code_points = false })
+      eq(printable(result1), printable(result2))
+    end
+
+    it('no code_points is equivalent to code_points = false', function()
+      test3('abc')
+      test3('Ⱡb\204\144\204\165ĸ\204\188\204\165')
+    end)
+  end)
 end)

@@ -1537,6 +1537,17 @@ nvim_set_vvar({name}, {value})                               *nvim_set_vvar()*
       • {name}   Variable name
       • {value}  Variable value
 
+nvim_string_reverse({str}, {opts})                     *nvim_string_reverse()*
+    Reverse utf8 string {str}. Composing and combining characters are
+    considered a part of the base character, unless {code_points} is true.
+
+    Parameters: ~
+      • {str}   String to reverse.
+      • {opts}  Optional parameters.
+                • code_points (boolean, default false): treat individual
+                  codepoints (e.g. composing and combining characters) as
+                  separate characters.
+
 nvim_strwidth({text})                                        *nvim_strwidth()*
     Calculates the number of display cells occupied by `text`. Control
     characters including <Tab> count as one cell.
