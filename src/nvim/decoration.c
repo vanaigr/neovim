@@ -1,4 +1,4 @@
-#include <assert.h>
+
 #include <limits.h>
 #include <stddef.h>
 #include <stdlib.h>
@@ -314,7 +314,8 @@ void decor_check_to_be_deleted(void)
 
 void decor_state_free(DecorState *state)
 {
-  kv_destroy(state->active);
+  kv_destroy(state->allDecors);
+  kv_destroy(state->sortedDecorInfo);
 }
 
 void clear_virttext(VirtText *text)
@@ -397,6 +398,8 @@ next_mark:
 
 bool decor_redraw_reset(win_T *wp, DecorState *state)
 {
+  // TODO2:
+  #if 0
   state->row = -1;
   state->win = wp;
   for (size_t i = 0; i < kv_size(state->active); i++) {
@@ -407,6 +410,8 @@ bool decor_redraw_reset(win_T *wp, DecorState *state)
     }
   }
   kv_size(state->active) = 0;
+  return wp->w_buffer->b_marktree->n_keys;
+# endif
   return wp->w_buffer->b_marktree->n_keys;
 }
 
@@ -452,6 +457,7 @@ bool decor_redraw_start(win_T *wp, int top_row, DecorState *state)
 
 bool decor_redraw_line(win_T *wp, int row, DecorState *state)
 {
+  // TODO2: compact allDecors, sortedDecorInfo
   if (state->row == -1) {
     decor_redraw_start(wp, row, state);
   }
@@ -459,7 +465,7 @@ bool decor_redraw_line(win_T *wp, int row, DecorState *state)
   state->col_until = -1;
   state->eol_col = -1;
 
-  if (kv_size(state->active)) {
+  if (kv_size(state->allDecors)) {
     return true;
   }
 
@@ -491,16 +497,39 @@ static void decor_range_add_from_inline(DecorState *state, int start_row, int st
 
 static void decor_range_insert(DecorState *state, DecorRange range)
 {
-  kv_pushp(state->active);
-  size_t index;
-  for (index = kv_size(state->active) - 1; index > 0; index--) {
-    DecorRange item = kv_A(state->active, index - 1);
-    if (item.priority <= range.priority) {
-      break;
+  int decor_index = kv_size(state->allDecors);
+  kv_push(state->allDecors, range);
+
+  DecorRange *ranges = &kv_A(state->allDecors, 0);
+  DecorInfo *infos = &kv_A(state->sortedDecorInfo, 0);
+
+  uint64_t range_pos = ((uint64_t)range.start_row << 32) | range.start_col;
+  int orig_size = (int)kv_size(state->sortedDecorInfo);
+
+  int begin = state->future_start;
+  int end = orig_size;
+  while(begin < end) {
+    int mid = begin + ((end - begin) >> 1);
+    DecorInfoFuture other = infos[mid].future;
+    DecorRange *o_range = ranges + other.decor_index;
+    uint64_t other_pos = ((uint64_t)o_range->start_row << 32) | o_range->start_col;
+
+    // if everything is equal, new ranges are considered to have higher priority
+    if(other_pos < range_pos
+      || (other_pos == range_pos && other.priority <= range.priority)) {
+      begin = mid + 1;
     }
-    kv_A(state->active, index) = kv_A(state->active, index - 1);
+    else {
+      end = mid;
+    }
   }
-  kv_A(state->active, index) = range;
+
+  kv_pushp(state->sortedDecorInfo);
+  DecorInfo *pos = &kv_A(state->sortedDecorInfo, begin);
+  memmove(pos, pos + sizeof(*pos), (orig_size - begin) * sizeof(*pos));
+  *pos = (DecorInfo){
+    .future = { .priority = range.priority, .decor_index = decor_index },
+  };
 }
 
 void decor_range_add_virt(DecorState *state, int start_row, int start_col, int end_row, int end_col,
@@ -569,13 +598,18 @@ void decor_init_draw_col(int win_col, bool hidden, DecorRange *item)
 
 void decor_recheck_draw_col(int win_col, bool hidden, DecorState *state)
 {
-  for (size_t i = 0; i < kv_size(state->active); i++) {
-    DecorRange *item = &kv_A(state->active, i);
+  // TODO2: inactive?
+  #if 0
+  for (size_t i = 0; i < kv_size(state->allDecors); i++) {
+    DecorRange *item = &kv_A(state->allDecors, i);
     if (item->draw_col == -3) {
       decor_init_draw_col(win_col, hidden, item);
     }
   }
+#endif
 }
+
+int ccount[256];
 
 int decor_redraw_col(win_T *wp, int col, int win_col, bool hidden, DecorState *state)
 {
@@ -583,7 +617,7 @@ int decor_redraw_col(win_T *wp, int col, int win_col, bool hidden, DecorState *s
   if (col <= state->col_until) {
     return state->current;
   }
-  state->col_until = MAXCOL;
+  int col_until = MAXCOL;
   while (true) {
     // TODO(bfredl): check duplicate entry in "intersection"
     // branch
@@ -591,7 +625,7 @@ int decor_redraw_col(win_T *wp, int col, int win_col, bool hidden, DecorState *s
     if (mark.pos.row < 0 || mark.pos.row > state->row) {
       break;
     } else if (mark.pos.row == state->row && mark.pos.col > col) {
-      state->col_until = mark.pos.col - 1;
+      col_until = mark.pos.col - 1;
       break;
     }
 
@@ -607,78 +641,106 @@ next_mark:
     marktree_itr_next(buf->b_marktree, state->itr);
   }
 
+  int const row = state->row;
+  int const f_end = kv_size(state->sortedDecorInfo);
+  DecorInfo *const infos = &kv_A(state->sortedDecorInfo, 0);
+  DecorRange *const ranges = &kv_A(state->allDecors, 0);
+  int cur_end = state->cur_end;
+  int future_start = state->future_start;
+
+  for(; future_start < f_end; future_start++) {
+    DecorInfoFuture fi = infos[future_start].future;
+    DecorRange *fr = ranges + fi.decor_index;
+    if(fr->start_row != row || fr->start_col != col) break;
+    DecorPriority f_priority = fr->priority;
+
+    int begin = 0;
+    int end = cur_end;
+    while(begin < end) {
+      int mid = begin + ((end - begin) >> 1);
+      DecorInfoCur ci = infos[mid].cur;
+      DecorRange *cr = ranges + ci.decor_index;
+      if(cr->priority <= f_priority) {
+        begin = mid + 1;
+      }
+      else {
+        end = mid;
+      }
+    }
+
+    DecorInfo *pos = infos + begin;
+    memmove(pos, pos + sizeof(*pos), (cur_end - begin) * sizeof(*pos));
+    *pos = (DecorInfo){
+      .cur = {
+        .end_col = ranges[fi.decor_index].end_col,
+        .decor_index = fi.decor_index,
+      },
+    };
+    cur_end++;
+  }
+
+  if(future_start < f_end) {
+    int start_col = ranges[infos[future_start].future.decor_index].start_col;
+    col_until = MIN(col_until, start_col);
+  }
+
+
   int attr = 0;
-  size_t j = 0;
   int conceal = 0;
   schar_T conceal_char = 0;
   int conceal_attr = 0;
   TriState spell = kNone;
 
-  for (size_t i = 0; i < kv_size(state->active); i++) {
-    DecorRange item = kv_A(state->active, i);
-    bool active = false, keep = true;
-    if (item.end_row < state->row
-        || (item.end_row == state->row && item.end_col <= col)) {
-      if (!(item.start_row >= state->row && decor_virt_pos(&item))) {
-        keep = false;
-      }
-    } else {
-      if (item.start_row < state->row
-          || (item.start_row == state->row && item.start_col <= col)) {
-        active = true;
-        if (item.end_row == state->row && item.end_col > col) {
-          state->col_until = MIN(state->col_until, item.end_col - 1);
-        }
-      } else {
-        if (item.start_row == state->row) {
-          state->col_until = MIN(state->col_until, item.start_col - 1);
-        }
-      }
+  int new_i = 0;
+  for (int i = 0; i < cur_end; i++) {
+    DecorInfoCur info = infos[i].cur;
+    DecorRange *range = ranges + info.decor_index;
+
+    if (info.end_col < col) {
+      continue;
     }
-    if (active && item.attr_id > 0) {
-      attr = hl_combine_attr(attr, item.attr_id);
+
+    col_until = MIN(col_until, info.end_col);
+
+    if (range->attr_id > 0) {
+      attr = hl_combine_attr(attr, range->attr_id);
     }
-    if (active && item.kind == kDecorKindHighlight && (item.data.sh.flags & kSHConceal)) {
+    if (range->kind == kDecorKindHighlight && (range->data.sh.flags & kSHConceal)) {
       conceal = 1;
-      if (item.start_row == state->row && item.start_col == col) {
-        DecorSignHighlight *sh = &item.data.sh;
+      if (range->start_row == row && range->start_col == col) {
+        DecorSignHighlight *sh = &range->data.sh;
         conceal = 2;
         conceal_char = sh->text[0];
-        state->col_until = MIN(state->col_until, item.start_col);
-        conceal_attr = item.attr_id;
+        col_until = MIN(col_until, range->start_col);
+        conceal_attr = range->attr_id;
       }
     }
-    if (active && item.kind == kDecorKindHighlight) {
-      if (item.data.sh.flags & kSHSpellOn) {
+    if (range->kind == kDecorKindHighlight) {
+      if (range->data.sh.flags & kSHSpellOn) {
         spell = kTrue;
-      } else if (item.data.sh.flags & kSHSpellOff) {
+      } else if (range->data.sh.flags & kSHSpellOff) {
         spell = kFalse;
       }
-      if (item.data.sh.url != NULL) {
-        attr = hl_add_url(attr, item.data.sh.url);
+      if (range->data.sh.url != NULL) {
+        attr = hl_add_url(attr, range->data.sh.url);
       }
     }
-    if (item.start_row == state->row && item.start_col <= col
-        && decor_virt_pos(&item) && item.draw_col == -10) {
-      decor_init_draw_col(win_col, hidden, &item);
+    if (decor_virt_pos(range) && range->draw_col == -10) {
+      decor_init_draw_col(win_col, hidden, range);
     }
-    if (keep) {
-      kv_A(state->active, j++) = item;
-    } else if (item.owned) {
-      if (item.kind == kDecorKindVirtText) {
-        clear_virttext(&item.data.vt->data.virt_text);
-        xfree(item.data.vt);
-      } else if (item.kind == kDecorKindHighlight) {
-        xfree((void *)item.data.sh.url);
-      }
-    }
+
+    infos[new_i++] = (DecorInfo){ .cur = info };
   }
-  kv_size(state->active) = j;
+
   state->current = attr;
   state->conceal = conceal;
   state->conceal_char = conceal_char;
   state->conceal_attr = conceal_attr;
   state->spell = spell;
+  state->future_start = future_start;
+  state->cur_end = cur_end;
+  state->col_until = col_until;
+
   return attr;
 }
 
@@ -861,13 +923,10 @@ void buf_signcols_count_range(buf_T *buf, int row1, int row2, int add, TriState 
   xfree(count);
 }
 
-void decor_redraw_end(DecorState *state)
-{
-  state->win = NULL;
-}
-
 bool decor_redraw_eol(win_T *wp, DecorState *state, int *eol_attr, int eol_col)
 {
+  // TODO2
+  #if 0
   decor_redraw_col(wp, MAXCOL, MAXCOL, false, state);
   state->eol_col = eol_col;
   bool has_virt_pos = false;
@@ -883,6 +942,8 @@ bool decor_redraw_eol(win_T *wp, DecorState *state, int *eol_attr, int eol_col)
     }
   }
   return has_virt_pos;
+#endif
+  return false;
 }
 
 static const uint32_t lines_filter[4] = {[kMTMetaLines] = kMTFilterSelect };

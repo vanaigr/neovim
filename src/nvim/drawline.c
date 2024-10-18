@@ -251,6 +251,8 @@ static int line_putchar(buf_T *buf, const char **pp, schar_T *dest, int maxcells
 
 static void draw_virt_text(win_T *wp, buf_T *buf, int col_off, int *end_col, int win_row)
 {
+  // TODO2
+  #if 0
   DecorState *state = &decor_state;
   const int max_col = wp->w_grid.cols;
   int right_pos = max_col;
@@ -305,6 +307,7 @@ static void draw_virt_text(win_T *wp, buf_T *buf, int col_off, int *end_col, int
       item->draw_col = INT_MIN;  // deactivate
     }
   }
+#endif
 }
 
 static int draw_virt_text_item(buf_T *buf, int col, VirtText vt, HlMode hl_mode, int max_col,
@@ -753,6 +756,8 @@ static void apply_cursorline_highlight(win_T *wp, winlinevars_T *wlv)
 /// Checks if there is more inline virtual text that need to be drawn.
 static bool has_more_inline_virt(winlinevars_T *wlv, ptrdiff_t v)
 {
+  // TODO2
+  #if 0
   if (wlv->virt_inline_i < kv_size(wlv->virt_inline)) {
     return true;
   }
@@ -769,11 +774,14 @@ static bool has_more_inline_virt(winlinevars_T *wlv, ptrdiff_t v)
       return true;
     }
   }
+#endif
   return false;
 }
 
 static void handle_inline_virtual_text(win_T *wp, winlinevars_T *wlv, ptrdiff_t v, bool selected)
 {
+  // TODO2
+  #if 0
   while (wlv->n_extra == 0) {
     if (wlv->virt_inline_i >= kv_size(wlv->virt_inline)) {
       // need to find inline virtual text
@@ -849,6 +857,7 @@ static void handle_inline_virtual_text(win_T *wp, winlinevars_T *wlv, ptrdiff_t 
       wlv->extra_for_extmark = true;
     }
   }
+#endif
 }
 
 /// Start a screen line at column zero.
@@ -890,6 +899,28 @@ static int get_rightmost_vcol(win_T *wp, const int *color_cols)
   }
 
   return ret;
+}
+
+#include <stdio.h>
+#include <time.h>
+extern int ccount[256];
+
+static void writeDigits(FILE *f, long long d, int di) {
+  if(d == 0) return;
+
+  writeDigits(f, d / 10, di + 1);
+  int rem = d % 10;
+  fprintf(f, "%c", (char)('0' + rem));
+  if(di == 3) fprintf(f, "'");
+}
+
+static void writeNumber(FILE *f, long long d) {
+  if(d == 0) {
+    fprintf(f, "0");
+  }
+  else {
+    writeDigits(f, d, 0);
+  }
 }
 
 /// Display line "lnum" of window "wp" on the screen.
@@ -1662,9 +1693,20 @@ int win_line(win_T *wp, linenr_T lnum, int startrow, int endrow, int col_rows, s
           }
           decor_need_recheck = false;
         }
+
+    struct timespec ts, ts2;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+
         extmark_attr = decor_redraw_col(wp, (colnr_T)(ptr - line),
                                         may_have_inline_virt ? -3 : wlv.off,
                                         selected, &decor_state);
+    clock_gettime(CLOCK_MONOTONIC, &ts2);
+
+    FILE *file = fopen("/home/artarar/neovim/gl.txt", "a");
+    long ns1 = ts.tv_sec * 1000000000 + ts.tv_nsec;
+    long ns2 = ts2.tv_sec * 1000000000 + ts2.tv_nsec;
+    fprintf(file, "Diff for %ld: %ld -- %d, %d\n", ptr - line, ns2 - ns1, ccount[0], ccount[1]);
+    fclose(file);
         if (may_have_inline_virt) {
           handle_inline_virtual_text(wp, &wlv, ptr - line, selected);
           if (wlv.n_extra > 0 && wlv.virt_inline_hl_mode <= kHlModeReplace) {
