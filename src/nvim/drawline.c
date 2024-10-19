@@ -256,8 +256,8 @@ static void draw_virt_text(win_T *wp, buf_T *buf, int col_off, int *end_col, int
   int right_pos = max_col;
   bool do_eol = state->eol_col > -1;
 
-  size_t count = kv_size(state->sorted_ranges_i);
-  int *indices = &kv_A(state->sorted_ranges_i, 0);
+  size_t count = state->current_end;
+  int *indices = &kv_A(state->ranges_i, 0);
   DecorRangeSlot *slots = &kv_A(state->slots, 0);
 
   for (size_t i = 0; i < count; i++) {
@@ -763,25 +763,35 @@ static bool has_more_inline_virt(winlinevars_T *wlv, ptrdiff_t v)
   if (wlv->virt_inline_i < kv_size(wlv->virt_inline)) {
     return true;
   }
-  DecorState *state = &decor_state;
-  size_t count = kv_size(state->sorted_ranges_i);
-  int *indices = &kv_A(state->sorted_ranges_i, 0);
-  DecorRangeSlot *slots = &kv_A(state->slots, 0);
 
-  for (size_t i = 0; i < count; i++) {
-    int index = indices[i];
-    DecorRange *range = &slots[index].range;
+  DecorState *const state = &decor_state;
+  int const count = (int)kv_size(state->ranges_i);
+  int const cur_end = state->current_end;
+  int const fut_beg = state->future_begin;
+  int *const indices = &kv_A(state->ranges_i, 0);
+  DecorRangeSlot *const slots = &kv_A(state->slots, 0);
+  int const begin_pos[] = { 0, fut_beg };
+  int const end_pos[] = { cur_end, count };
 
-    if (range->start_row != state->row
-        || range->kind != kDecorKindVirtText
-        || range->data.vt->pos != kVPosInline
-        || range->data.vt->width == 0) {
-      continue;
-    }
-    if (range->draw_col >= -1 && range->start_col >= v) {
-      return true;
+  for(int pos_i = 0; pos_i < 2; pos_i++) {
+    int beg = begin_pos[pos_i], end = end_pos[pos_i];
+
+    for (int i = beg; i < end; i++) {
+      int index = indices[i];
+      DecorRange *range = &slots[index].range;
+
+      if (range->start_row != state->row
+          || range->kind != kDecorKindVirtText
+          || range->data.vt->pos != kVPosInline
+          || range->data.vt->width == 0) {
+        continue;
+      }
+      if (range->draw_col >= -1 && range->start_col >= v) {
+        return true;
+      }
     }
   }
+
   return false;
 }
 
@@ -794,11 +804,11 @@ static void handle_inline_virtual_text(win_T *wp, winlinevars_T *wlv, ptrdiff_t 
       wlv->virt_inline_i = 0;
       DecorState *state = &decor_state;
 
-      size_t count = kv_size(state->sorted_ranges_i);
-      int *indices = &kv_A(state->sorted_ranges_i, 0);
-      DecorRangeSlot *slots = &kv_A(state->slots, 0);
+      int const count = state->current_end;
+      int *const indices = &kv_A(state->ranges_i, 0);
+      DecorRangeSlot *const slots = &kv_A(state->slots, 0);
 
-      for (size_t i = 0; i < count; i++) {
+      for (int i = 0; i < count; i++) {
         int index = indices[i];
         DecorRange *range = &slots[index].range;
 
@@ -911,6 +921,10 @@ static int get_rightmost_vcol(win_T *wp, const int *color_cols)
 
   return ret;
 }
+
+#include <stdio.h>
+#include <time.h>
+extern int ccount[256];
 
 /// Display line "lnum" of window "wp" on the screen.
 /// wp->w_virtcol needs to be valid.
@@ -1682,9 +1696,32 @@ int win_line(win_T *wp, linenr_T lnum, int startrow, int endrow, int col_rows, s
           }
           decor_need_recheck = false;
         }
-        extmark_attr = decor_redraw_col(wp, (colnr_T)(ptr - line),
-                                        may_have_inline_virt ? -3 : wlv.off,
-                                        selected, &decor_state);
+
+        struct timespec ts, ts2;
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+
+            extmark_attr = decor_redraw_col(wp, (colnr_T)(ptr - line),
+                                            may_have_inline_virt ? -3 : wlv.off,
+                                            selected, &decor_state);
+        clock_gettime(CLOCK_MONOTONIC, &ts2);
+
+        FILE *file = fopen("/home/artarar/neovim/gl.txt", "a");
+        long ns1 = ts.tv_sec * 1000000000 + ts.tv_nsec;
+        long ns2 = ts2.tv_sec * 1000000000 + ts2.tv_nsec;
+        fprintf(
+          file,
+          "Diff for %ld: %ld -- %d. %d-%d, %d-%d\n",
+          ptr - line,
+          ns2 - ns1,
+          ccount[0],
+          ccount[1],
+          ccount[2],
+          ccount[3],
+          ccount[4]
+        );
+        memset(ccount, 0, 256*4);
+        fclose(file);
+
         if (may_have_inline_virt) {
           handle_inline_virtual_text(wp, &wlv, ptr - line, selected);
           if (wlv.n_extra > 0 && wlv.virt_inline_hl_mode <= kHlModeReplace) {

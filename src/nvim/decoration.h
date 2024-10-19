@@ -30,10 +30,14 @@ typedef enum {
 } DecorRangeKind;
 
 typedef struct {
-  int start_row;
   int start_col;
-  int end_row;
+  int start_row;
   int end_col;
+  int end_row;
+  int ordering;
+  DecorPriority priority;
+  bool owned;   ///< ephemeral decoration, free memory immediately
+  DecorRangeKind kind : 8;
   // next pointers MUST NOT be used, these are separate ranges
   // vt->next could be pointing to freelist memory at this point
   union {
@@ -46,9 +50,6 @@ typedef struct {
     } ui;
   } data;
   int attr_id;  ///< cached lookup of inl.hl_id if it was a highlight
-  bool owned;   ///< ephemeral decoration, free memory immediately
-  DecorPriority priority;
-  DecorRangeKind kind;
   /// Screen column to draw the virtual text.
   /// When -1, it should be drawn on the current screen line after deciding where.
   /// When -3, it may be drawn at a position yet to be assigned.
@@ -65,9 +66,12 @@ typedef union {
 typedef struct {
   MarkTreeIter itr[1];
   kvec_t(DecorRangeSlot) slots;
-  kvec_t(int) sorted_ranges_i;
-  win_T *win;
+  kvec_t(int) ranges_i;
+  int current_end;
+  int future_begin;
   int free_slot_i;
+  int new_range_ordering; ///< increasing index for the newly added slot, for ordering.
+  win_T *win;
   int top_row;
   int row;
   int col_until;

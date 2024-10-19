@@ -26,6 +26,7 @@
 #include "nvim/option_vars.h"
 #include "nvim/pos_defs.h"
 #include "nvim/sign.h"
+#include "klib/kvec.h"
 
 #ifdef INCLUDE_GENERATED_DECLARATIONS
 # include "decoration.c.generated.h"
@@ -315,7 +316,7 @@ void decor_check_to_be_deleted(void)
 void decor_state_free(DecorState *state)
 {
   kv_destroy(state->slots);
-  kv_destroy(state->sorted_ranges_i);
+  kv_destroy(state->ranges_i);
 }
 
 void clear_virttext(VirtText *text)
@@ -401,8 +402,8 @@ bool decor_redraw_reset(win_T *wp, DecorState *state)
   state->row = -1;
   state->win = wp;
 
-  size_t count = kv_size(state->sorted_ranges_i);
-  int *indices = &kv_A(state->sorted_ranges_i, 0);
+  size_t count = kv_size(state->ranges_i);
+  int *indices = &kv_A(state->ranges_i, 0);
   DecorRangeSlot *slots = &kv_A(state->slots, 0);
 
   for (size_t i = 0; i < count; i++) {
@@ -416,9 +417,12 @@ bool decor_redraw_reset(win_T *wp, DecorState *state)
     }
   }
 
-  kv_size(state->sorted_ranges_i) = 0;
+  kv_size(state->ranges_i) = 0;
   kv_size(state->slots) = 0;
   state->free_slot_i = -1;
+  state->current_end = 0;
+  state->future_begin = 0;
+  state->new_range_ordering = 0;
 
   return wp->w_buffer->b_marktree->n_keys;
 }
@@ -465,6 +469,25 @@ bool decor_redraw_start(win_T *wp, int top_row, DecorState *state)
 
 bool decor_redraw_line(win_T *wp, int row, DecorState *state)
 {
+  int count = (int)kv_size(state->ranges_i);
+  int cur_end = state->current_end;
+  int fut_beg = state->future_begin;
+
+  if(fut_beg == count) {
+    fut_beg = count = cur_end;
+  } else if(fut_beg != cur_end) {
+    memmove(&kv_A(state->ranges_i, cur_end),
+            &kv_A(state->ranges_i, fut_beg),
+            (count - fut_beg) * sizeof(kv_A(state->ranges_i, 0)));
+
+    count = cur_end + (count - fut_beg);
+    fut_beg = cur_end;
+  }
+
+  kv_size(state->ranges_i) = count;
+  state->current_end = cur_end;
+  state->future_begin = fut_beg;
+
   if (state->row == -1) {
     decor_redraw_start(wp, row, state);
   }
@@ -472,7 +495,7 @@ bool decor_redraw_line(win_T *wp, int row, DecorState *state)
   state->col_until = -1;
   state->eol_col = -1;
 
-  if (kv_size(state->sorted_ranges_i)) {
+  if (state->current_end != 0 || state->future_begin != (int)kv_size(state->ranges_i)) {
     return true;
   }
 
@@ -504,7 +527,11 @@ static void decor_range_add_from_inline(DecorState *state, int start_row, int st
 
 static void decor_range_insert(DecorState *state, DecorRange *range)
 {
-  int priority = range->priority;
+  range->ordering = state->new_range_ordering++;
+
+  uint64_t pos = range_pos(range);
+  uint64_t order = range_order(range);
+
   int index;
   if(state->free_slot_i >= 0) {
     index = state->free_slot_i;
@@ -516,25 +543,28 @@ static void decor_range_insert(DecorState *state, DecorRange *range)
     kv_pushp(state->slots)->range = *range;
   }
 
-  size_t count = kv_size(state->sorted_ranges_i);
-  int *indices = &kv_A(state->sorted_ranges_i, 0);
+  size_t count = kv_size(state->ranges_i);
+  int *indices = &kv_A(state->ranges_i, 0);
   DecorRangeSlot *slots = &kv_A(state->slots, 0);
 
-  size_t begin = 0;
+  size_t begin = state->future_begin;
   size_t end = count;
   while(begin < end) {
     int mid = begin + ((end - begin) >> 1);
-    int m_index = indices[mid];
-    DecorPriority m_p = slots[m_index].range.priority;
-    if(m_p <= priority) {
+    int mindex = indices[mid];
+    DecorRange *mr = &slots[mindex].range;
+    uint64_t mpos = range_pos(mr);
+    uint64_t morder = range_order(mr);
+
+    if(mpos < pos || (mpos == pos && morder < order)) {
       begin = mid + 1;
     } else {
       end = mid;
     }
   }
 
-  kv_pushp(state->sorted_ranges_i);
-  int *item = &kv_A(state->sorted_ranges_i, begin);
+  kv_pushp(state->ranges_i);
+  int *item = &kv_A(state->ranges_i, begin);
   memmove(item + 1, item, (count - begin) * sizeof(*item));
   *item = index;
 }
@@ -605,8 +635,8 @@ void decor_init_draw_col(int win_col, bool hidden, DecorRange *item)
 
 void decor_recheck_draw_col(int win_col, bool hidden, DecorState *state)
 {
-  size_t count = kv_size(state->sorted_ranges_i);
-  int *indices = &kv_A(state->sorted_ranges_i, 0);
+  size_t count = kv_size(state->ranges_i);
+  int *indices = &kv_A(state->ranges_i, 0);
   DecorRangeSlot *slots = &kv_A(state->slots, 0);
 
   for (size_t i = 0; i < count; i++) {
@@ -618,21 +648,43 @@ void decor_recheck_draw_col(int win_col, bool hidden, DecorState *state)
   }
 }
 
+static inline uint64_t compress_pos(int row, int col)
+  FUNC_ATTR_PURE FUNC_ATTR_ALWAYS_INLINE {
+  uint32_t r = (uint32_t)row + (uint32_t)INT_MIN;
+  uint32_t c = (uint32_t)col + (uint32_t)INT_MIN;
+  return ((uint64_t)r << 32) | (uint64_t)c;
+}
+
+static inline uint64_t range_pos(DecorRange const *range)
+  FUNC_ATTR_PURE FUNC_ATTR_ALWAYS_INLINE {
+  return compress_pos(range->start_row, range->start_col);
+}
+
+static inline uint64_t range_order(DecorRange const *range)
+  FUNC_ATTR_PURE FUNC_ATTR_ALWAYS_INLINE {
+  return ((uint64_t)range->priority << 32) | (uint64_t)range->ordering;
+}
+
+int ccount[256];
+
 int decor_redraw_col(win_T *wp, int col, int win_col, bool hidden, DecorState *state)
 {
   buf_T *buf = wp->w_buffer;
-  if (col <= state->col_until) {
+  int col_until = state->col_until;
+  if (col <= col_until) {
     return state->current;
   }
-  state->col_until = MAXCOL;
+  col_until = MAXCOL;
+  int const row = state->row;
+
   while (true) {
     // TODO(bfredl): check duplicate entry in "intersection"
     // branch
     MTKey mark = marktree_itr_current(state->itr);
-    if (mark.pos.row < 0 || mark.pos.row > state->row) {
+    if (mark.pos.row < 0 || mark.pos.row > row) {
       break;
-    } else if (mark.pos.row == state->row && mark.pos.col > col) {
-      state->col_until = mark.pos.col - 1;
+    } else if (mark.pos.row == row && mark.pos.col > col) {
+      col_until = mark.pos.col - 1;
       break;
     }
 
@@ -648,70 +700,106 @@ next_mark:
     marktree_itr_next(buf->b_marktree, state->itr);
   }
 
-  size_t count = kv_size(state->sorted_ranges_i);
-  int *indices = &kv_A(state->sorted_ranges_i, 0);
-  DecorRangeSlot *slots = &kv_A(state->slots, 0);
+  int *const indices = &kv_A(state->ranges_i, 0);
+  DecorRangeSlot *const slots = &kv_A(state->slots, 0);
+  uint64_t const pos = compress_pos(row, col);
+
+  int count = (int)kv_size(state->ranges_i);
+  int cur_end = state->current_end;
+  int fut_beg = state->future_begin;
+
+  ccount[0] = count;
+  ccount[1] = cur_end;
+  ccount[2] = fut_beg;
+
+  for(; fut_beg < count; fut_beg++) {
+    int index = indices[fut_beg];
+    DecorRange *range = &slots[index].range;
+    if(range_pos(range) > pos) break;
+    uint64_t order = range_order(range);
+
+    int begin = 0;
+    int end = cur_end;
+    while (begin < end) {
+      int mid = begin + ((end - begin) >> 1);
+      int mi = indices[mid];
+      DecorRange *mr = &slots[mi].range;
+      uint64_t mo = range_order(mr);
+      if(mo < order) {
+        begin = mid + 1;
+      } else {
+        end = mid;
+      }
+    }
+
+    int *item = indices + begin;
+    memmove(item, item + sizeof(*item), (cur_end - begin) * sizeof(*item));
+    *item = index;
+    cur_end++;
+  }
+
+  if(fut_beg != count) {
+    DecorRange *r = &slots[indices[fut_beg]].range;
+    if(r->start_row == row) {
+      col_until = r->start_col;
+    }
+  }
+
+  size_t new_cur_end = 0;
 
   int attr = 0;
-  size_t j = 0;
   int conceal = 0;
   schar_T conceal_char = 0;
   int conceal_attr = 0;
   TriState spell = kNone;
 
-  for (size_t i = 0; i < count; i++) {
+  ccount[3] = cur_end;
+  ccount[4] = fut_beg;
+
+  for (int i = 0; i < cur_end; i++) {
     int index = indices[i];
     DecorRangeSlot *slot = slots + index;
     DecorRange *range = &slot->range;
 
-    bool active = false, keep = true;
-    if (range->end_row < state->row
-        || (range->end_row == state->row && range->end_col <= col)) {
-      if (!(range->start_row >= state->row && decor_virt_pos(range))) {
-        keep = false;
-      }
+    bool keep = true;
+    if(compress_pos(range->end_row, range->end_col) <= pos) {
+      keep = range->start_row >= row && decor_virt_pos(range);
     } else {
-      if (range->start_row < state->row
-          || (range->start_row == state->row && range->start_col <= col)) {
-        active = true;
-        if (range->end_row == state->row && range->end_col > col) {
-          state->col_until = MIN(state->col_until, range->end_col - 1);
+      if (range->end_row == row && range->end_col > col) {
+        col_until = MIN(col_until, range->end_col - 1);
+      }
+
+      if (range->attr_id > 0) {
+        attr = hl_combine_attr(attr, range->attr_id);
+      }
+      if (range->kind == kDecorKindHighlight && (range->data.sh.flags & kSHConceal)) {
+        conceal = 1;
+        if (range->start_row == state->row && range->start_col == col) {
+          DecorSignHighlight *sh = &range->data.sh;
+          conceal = 2;
+          conceal_char = sh->text[0];
+          state->col_until = MIN(state->col_until, range->start_col);
+          conceal_attr = range->attr_id;
         }
-      } else {
-        if (range->start_row == state->row) {
-          state->col_until = MIN(state->col_until, range->start_col - 1);
+      }
+      if (range->kind == kDecorKindHighlight) {
+        if (range->data.sh.flags & kSHSpellOn) {
+          spell = kTrue;
+        } else if (range->data.sh.flags & kSHSpellOff) {
+          spell = kFalse;
+        }
+        if (range->data.sh.url != NULL) {
+          attr = hl_add_url(attr, range->data.sh.url);
         }
       }
     }
-    if (active && range->attr_id > 0) {
-      attr = hl_combine_attr(attr, range->attr_id);
-    }
-    if (active && range->kind == kDecorKindHighlight && (range->data.sh.flags & kSHConceal)) {
-      conceal = 1;
-      if (range->start_row == state->row && range->start_col == col) {
-        DecorSignHighlight *sh = &range->data.sh;
-        conceal = 2;
-        conceal_char = sh->text[0];
-        state->col_until = MIN(state->col_until, range->start_col);
-        conceal_attr = range->attr_id;
-      }
-    }
-    if (active && range->kind == kDecorKindHighlight) {
-      if (range->data.sh.flags & kSHSpellOn) {
-        spell = kTrue;
-      } else if (range->data.sh.flags & kSHSpellOff) {
-        spell = kFalse;
-      }
-      if (range->data.sh.url != NULL) {
-        attr = hl_add_url(attr, range->data.sh.url);
-      }
-    }
-    if (range->start_row == state->row && range->start_col <= col
-        && decor_virt_pos(range) && range->draw_col == -10) {
+
+    if (decor_virt_pos(range) && range->draw_col == -10) {
       decor_init_draw_col(win_col, hidden, range);
     }
+
     if (keep) {
-      indices[j++] = index;
+      indices[new_cur_end++] = index;
     } else {
       if (range->owned) {
         if (range->kind == kDecorKindVirtText) {
@@ -727,8 +815,17 @@ next_mark:
       *fi = index;
     }
   }
+  cur_end = new_cur_end;
 
-  kv_size(state->sorted_ranges_i) = j;
+  if(fut_beg == count) {
+    fut_beg = count = cur_end;
+  }
+
+  kv_size(state->ranges_i) = count;
+  state->future_begin = fut_beg;
+  state->current_end = cur_end;
+  state->col_until = col_until;
+
   state->current = attr;
   state->conceal = conceal;
   state->conceal_char = conceal_char;
@@ -927,12 +1024,12 @@ bool decor_redraw_eol(win_T *wp, DecorState *state, int *eol_attr, int eol_col)
   decor_redraw_col(wp, MAXCOL, MAXCOL, false, state);
   state->eol_col = eol_col;
 
-  size_t count = kv_size(state->sorted_ranges_i);
-  int *indices = &kv_A(state->sorted_ranges_i, 0);
-  DecorRangeSlot *slots = &kv_A(state->slots, 0);
+  int const count = state->current_end;
+  int *const indices = &kv_A(state->ranges_i, 0);
+  DecorRangeSlot *const slots = &kv_A(state->slots, 0);
 
   bool has_virt_pos = false;
-  for (size_t i = 0; i < count; i++) {
+  for (int i = 0; i < count; i++) {
     int index = indices[i];
     DecorRange *range = &slots[index].range;
 
