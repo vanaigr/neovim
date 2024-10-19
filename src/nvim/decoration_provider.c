@@ -121,7 +121,7 @@ void decor_providers_invoke_win(win_T *wp)
 {
   // this might change in the future
   // then we would need decor_state.running_decor_provider just like "on_line" below
-  assert(kv_size(decor_state.active) == 0);
+  assert(kv_size(decor_state.sorted_ranges_i) == 0);
 
   if (kv_size(decor_providers) > 0) {
     validate_botline(wp);

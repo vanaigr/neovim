@@ -314,7 +314,8 @@ void decor_check_to_be_deleted(void)
 
 void decor_state_free(DecorState *state)
 {
-  kv_destroy(state->active);
+  kv_destroy(state->slots);
+  kv_destroy(state->sorted_ranges_i);
 }
 
 void clear_virttext(VirtText *text)
@@ -399,14 +400,26 @@ bool decor_redraw_reset(win_T *wp, DecorState *state)
 {
   state->row = -1;
   state->win = wp;
-  for (size_t i = 0; i < kv_size(state->active); i++) {
-    DecorRange item = kv_A(state->active, i);
-    if (item.owned && item.kind == kDecorKindVirtText) {
-      clear_virttext(&item.data.vt->data.virt_text);
-      xfree(item.data.vt);
+
+  size_t count = kv_size(state->sorted_ranges_i);
+  int *indices = &kv_A(state->sorted_ranges_i, 0);
+  DecorRangeSlot *slots = &kv_A(state->slots, 0);
+
+  for (size_t i = 0; i < count; i++) {
+    int index = indices[i];
+    DecorRangeSlot *slot = slots + index;
+    DecorRange *range = &slot->range;
+
+    if (range->owned && range->kind == kDecorKindVirtText) {
+      clear_virttext(&range->data.vt->data.virt_text);
+      xfree(range->data.vt);
     }
   }
-  kv_size(state->active) = 0;
+
+  kv_size(state->sorted_ranges_i) = 0;
+  kv_size(state->slots) = 0;
+  state->free_slot_i = -1;
+
   return wp->w_buffer->b_marktree->n_keys;
 }
 
@@ -459,7 +472,7 @@ bool decor_redraw_line(win_T *wp, int row, DecorState *state)
   state->col_until = -1;
   state->eol_col = -1;
 
-  if (kv_size(state->active)) {
+  if (kv_size(state->sorted_ranges_i)) {
     return true;
   }
 
@@ -489,18 +502,41 @@ static void decor_range_add_from_inline(DecorState *state, int start_row, int st
   }
 }
 
-static void decor_range_insert(DecorState *state, DecorRange range)
+static void decor_range_insert(DecorState *state, DecorRange *range)
 {
-  kv_pushp(state->active);
-  size_t index;
-  for (index = kv_size(state->active) - 1; index > 0; index--) {
-    DecorRange item = kv_A(state->active, index - 1);
-    if (item.priority <= range.priority) {
-      break;
-    }
-    kv_A(state->active, index) = kv_A(state->active, index - 1);
+  int priority = range->priority;
+  int index;
+  if(state->free_slot_i >= 0) {
+    index = state->free_slot_i;
+    DecorRangeSlot *slot = &kv_A(state->slots, index);
+    state->free_slot_i = slot->next_free_i;
+    slot->range = *range;
+  } else {
+    index = kv_size(state->slots);
+    kv_pushp(state->slots)->range = *range;
   }
-  kv_A(state->active, index) = range;
+
+  size_t count = kv_size(state->sorted_ranges_i);
+  int *indices = &kv_A(state->sorted_ranges_i, 0);
+  DecorRangeSlot *slots = &kv_A(state->slots, 0);
+
+  size_t begin = 0;
+  size_t end = count;
+  while(begin < end) {
+    int mid = begin + ((end - begin) >> 1);
+    int m_index = indices[mid];
+    DecorPriority m_p = slots[m_index].range.priority;
+    if(m_p <= priority) {
+      begin = mid + 1;
+    } else {
+      end = mid;
+    }
+  }
+
+  kv_pushp(state->sorted_ranges_i);
+  int *item = &kv_A(state->sorted_ranges_i, begin);
+  memmove(item + 1, item, (count - begin) * sizeof(*item));
+  *item = index;
 }
 
 void decor_range_add_virt(DecorState *state, int start_row, int start_col, int end_row, int end_col,
@@ -516,7 +552,7 @@ void decor_range_add_virt(DecorState *state, int start_row, int start_col, int e
     .priority = vt->priority,
     .draw_col = -10,
   };
-  decor_range_insert(state, range);
+  decor_range_insert(state, &range);
 }
 
 void decor_range_add_sh(DecorState *state, int start_row, int start_col, int end_row, int end_col,
@@ -541,7 +577,7 @@ void decor_range_add_sh(DecorState *state, int start_row, int start_col, int end
     if (sh->hl_id) {
       range.attr_id = syn_id2attr(sh->hl_id);
     }
-    decor_range_insert(state, range);
+    decor_range_insert(state, &range);
   }
 
   if (sh->flags & (kSHUIWatched)) {
@@ -549,7 +585,7 @@ void decor_range_add_sh(DecorState *state, int start_row, int start_col, int end
     range.data.ui.ns_id = ns;
     range.data.ui.mark_id = mark_id;
     range.data.ui.pos = (sh->flags & kSHUIWatchedOverlay) ? kVPosOverlay : kVPosEndOfLine;
-    decor_range_insert(state, range);
+    decor_range_insert(state, &range);
   }
 }
 
@@ -569,10 +605,15 @@ void decor_init_draw_col(int win_col, bool hidden, DecorRange *item)
 
 void decor_recheck_draw_col(int win_col, bool hidden, DecorState *state)
 {
-  for (size_t i = 0; i < kv_size(state->active); i++) {
-    DecorRange *item = &kv_A(state->active, i);
-    if (item->draw_col == -3) {
-      decor_init_draw_col(win_col, hidden, item);
+  size_t count = kv_size(state->sorted_ranges_i);
+  int *indices = &kv_A(state->sorted_ranges_i, 0);
+  DecorRangeSlot *slots = &kv_A(state->slots, 0);
+
+  for (size_t i = 0; i < count; i++) {
+    int index = indices[i];
+    DecorRange *range = &slots[index].range;
+    if(range->draw_col == -3) {
+      decor_init_draw_col(win_col, hidden, range);
     }
   }
 }
@@ -607,6 +648,10 @@ next_mark:
     marktree_itr_next(buf->b_marktree, state->itr);
   }
 
+  size_t count = kv_size(state->sorted_ranges_i);
+  int *indices = &kv_A(state->sorted_ranges_i, 0);
+  DecorRangeSlot *slots = &kv_A(state->slots, 0);
+
   int attr = 0;
   size_t j = 0;
   int conceal = 0;
@@ -614,71 +659,82 @@ next_mark:
   int conceal_attr = 0;
   TriState spell = kNone;
 
-  for (size_t i = 0; i < kv_size(state->active); i++) {
-    DecorRange item = kv_A(state->active, i);
+  for (size_t i = 0; i < count; i++) {
+    int index = indices[i];
+    DecorRangeSlot *slot = slots + index;
+    DecorRange *range = &slot->range;
+
     bool active = false, keep = true;
-    if (item.end_row < state->row
-        || (item.end_row == state->row && item.end_col <= col)) {
-      if (!(item.start_row >= state->row && decor_virt_pos(&item))) {
+    if (range->end_row < state->row
+        || (range->end_row == state->row && range->end_col <= col)) {
+      if (!(range->start_row >= state->row && decor_virt_pos(range))) {
         keep = false;
       }
     } else {
-      if (item.start_row < state->row
-          || (item.start_row == state->row && item.start_col <= col)) {
+      if (range->start_row < state->row
+          || (range->start_row == state->row && range->start_col <= col)) {
         active = true;
-        if (item.end_row == state->row && item.end_col > col) {
-          state->col_until = MIN(state->col_until, item.end_col - 1);
+        if (range->end_row == state->row && range->end_col > col) {
+          state->col_until = MIN(state->col_until, range->end_col - 1);
         }
       } else {
-        if (item.start_row == state->row) {
-          state->col_until = MIN(state->col_until, item.start_col - 1);
+        if (range->start_row == state->row) {
+          state->col_until = MIN(state->col_until, range->start_col - 1);
         }
       }
     }
-    if (active && item.attr_id > 0) {
-      attr = hl_combine_attr(attr, item.attr_id);
+    if (active && range->attr_id > 0) {
+      attr = hl_combine_attr(attr, range->attr_id);
     }
-    if (active && item.kind == kDecorKindHighlight && (item.data.sh.flags & kSHConceal)) {
+    if (active && range->kind == kDecorKindHighlight && (range->data.sh.flags & kSHConceal)) {
       conceal = 1;
-      if (item.start_row == state->row && item.start_col == col) {
-        DecorSignHighlight *sh = &item.data.sh;
+      if (range->start_row == state->row && range->start_col == col) {
+        DecorSignHighlight *sh = &range->data.sh;
         conceal = 2;
         conceal_char = sh->text[0];
-        state->col_until = MIN(state->col_until, item.start_col);
-        conceal_attr = item.attr_id;
+        state->col_until = MIN(state->col_until, range->start_col);
+        conceal_attr = range->attr_id;
       }
     }
-    if (active && item.kind == kDecorKindHighlight) {
-      if (item.data.sh.flags & kSHSpellOn) {
+    if (active && range->kind == kDecorKindHighlight) {
+      if (range->data.sh.flags & kSHSpellOn) {
         spell = kTrue;
-      } else if (item.data.sh.flags & kSHSpellOff) {
+      } else if (range->data.sh.flags & kSHSpellOff) {
         spell = kFalse;
       }
-      if (item.data.sh.url != NULL) {
-        attr = hl_add_url(attr, item.data.sh.url);
+      if (range->data.sh.url != NULL) {
+        attr = hl_add_url(attr, range->data.sh.url);
       }
     }
-    if (item.start_row == state->row && item.start_col <= col
-        && decor_virt_pos(&item) && item.draw_col == -10) {
-      decor_init_draw_col(win_col, hidden, &item);
+    if (range->start_row == state->row && range->start_col <= col
+        && decor_virt_pos(range) && range->draw_col == -10) {
+      decor_init_draw_col(win_col, hidden, range);
     }
     if (keep) {
-      kv_A(state->active, j++) = item;
-    } else if (item.owned) {
-      if (item.kind == kDecorKindVirtText) {
-        clear_virttext(&item.data.vt->data.virt_text);
-        xfree(item.data.vt);
-      } else if (item.kind == kDecorKindHighlight) {
-        xfree((void *)item.data.sh.url);
+      indices[j++] = index;
+    } else {
+      if (range->owned) {
+        if (range->kind == kDecorKindVirtText) {
+          clear_virttext(&range->data.vt->data.virt_text);
+          xfree(range->data.vt);
+        } else if (range->kind == kDecorKindHighlight) {
+          xfree((void *)range->data.sh.url);
+        }
       }
+
+      int *fi = &state->free_slot_i;
+      slot->next_free_i = *fi;
+      *fi = index;
     }
   }
-  kv_size(state->active) = j;
+
+  kv_size(state->sorted_ranges_i) = j;
   state->current = attr;
   state->conceal = conceal;
   state->conceal_char = conceal_char;
   state->conceal_attr = conceal_attr;
   state->spell = spell;
+
   return attr;
 }
 
@@ -870,16 +926,23 @@ bool decor_redraw_eol(win_T *wp, DecorState *state, int *eol_attr, int eol_col)
 {
   decor_redraw_col(wp, MAXCOL, MAXCOL, false, state);
   state->eol_col = eol_col;
+
+  size_t count = kv_size(state->sorted_ranges_i);
+  int *indices = &kv_A(state->sorted_ranges_i, 0);
+  DecorRangeSlot *slots = &kv_A(state->slots, 0);
+
   bool has_virt_pos = false;
-  for (size_t i = 0; i < kv_size(state->active); i++) {
-    DecorRange item = kv_A(state->active, i);
-    if (item.start_row == state->row && decor_virt_pos(&item)) {
+  for (size_t i = 0; i < count; i++) {
+    int index = indices[i];
+    DecorRange *range = &slots[index].range;
+
+    if (range->start_row == state->row && decor_virt_pos(range)) {
       has_virt_pos = true;
     }
 
-    if (item.kind == kDecorKindHighlight
-        && (item.data.sh.flags & kSHHlEol) && item.start_row <= state->row) {
-      *eol_attr = hl_combine_attr(*eol_attr, item.attr_id);
+    if (range->kind == kDecorKindHighlight
+        && (range->data.sh.flags & kSHHlEol) && range->start_row <= state->row) {
+      *eol_attr = hl_combine_attr(*eol_attr, range->attr_id);
     }
   }
   return has_virt_pos;

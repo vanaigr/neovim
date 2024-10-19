@@ -57,10 +57,17 @@ typedef struct {
   int draw_col;
 } DecorRange;
 
+typedef union {
+  DecorRange range;
+  int next_free_i;
+} DecorRangeSlot;
+
 typedef struct {
   MarkTreeIter itr[1];
-  kvec_t(DecorRange) active;
+  kvec_t(DecorRangeSlot) slots;
+  kvec_t(int) sorted_ranges_i;
   win_T *win;
+  int free_slot_i;
   int top_row;
   int row;
   int col_until;
@@ -76,7 +83,7 @@ typedef struct {
   bool running_decor_provider;
 } DecorState;
 
-EXTERN DecorState decor_state INIT( = { 0 });
+EXTERN DecorState decor_state INIT( = { .free_slot_i = -1 });
 // TODO(bfredl): These should maybe be per-buffer, so that all resources
 // associated with a buffer can be freed when the buffer is unloaded.
 EXTERN kvec_t(DecorSignHighlight) decor_items INIT( = KV_INITIAL_VALUE);
