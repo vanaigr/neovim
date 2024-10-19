@@ -45,8 +45,9 @@ typedef struct {
       VirtTextPos pos;
     } ui;
   } data;
-  int attr_id;  ///< cached lookup of inl.hl_id if it was a highlight
-  bool owned;   ///< ephemeral decoration, free memory immediately
+  int attr_id;        ///< cached lookup of inl.hl_id if it was a highlight
+  uint32_t owned : 1; ///< ephemeral decoration, free memory immediately
+  uint32_t sorted_i : 31;
   DecorPriority priority;
   DecorRangeKind kind;
   /// Screen column to draw the virtual text.

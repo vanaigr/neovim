@@ -398,20 +398,31 @@ next_mark:
 
 bool decor_redraw_reset(win_T *wp, DecorState *state)
 {
-  // TODO2:
-  #if 0
   state->row = -1;
   state->win = wp;
-  for (size_t i = 0; i < kv_size(state->active); i++) {
-    DecorRange item = kv_A(state->active, i);
-    if (item.owned && item.kind == kDecorKindVirtText) {
-      clear_virttext(&item.data.vt->data.virt_text);
-      xfree(item.data.vt);
+
+  DecorRange *ranges = &kv_A(state->allDecors, 0);
+  int *indices = &kv_A(state->sortedDecorInfo, 0);
+  int begin_indices[] = { 0, state->future_start };
+  int end_indices[] = { state->cur_end, (int)kv_size(state->sortedDecorInfo) };
+
+  for(int ii = 0; ii < 2; ii++) {
+    int begin_i = begin_indices[ii];
+    int end_i = end_indices[ii];
+
+    for (int i = begin_i; i < end_i; i++) {
+      int index = indices[i];
+      DecorRange *item = ranges + index;
+      if (item->owned && item->kind == kDecorKindVirtText) {
+        clear_virttext(&item->data.vt->data.virt_text);
+        xfree(item->data.vt);
+      }
     }
   }
-  kv_size(state->active) = 0;
-  return wp->w_buffer->b_marktree->n_keys;
-# endif
+
+  kv_size(state->allDecors) = 0;
+  kv_size(state->sortedDecorInfo) = 0;
+
   return wp->w_buffer->b_marktree->n_keys;
 }
 
@@ -457,6 +468,7 @@ bool decor_redraw_start(win_T *wp, int top_row, DecorState *state)
 
 bool decor_redraw_line(win_T *wp, int row, DecorState *state)
 {
+  for(
   // TODO2: compact allDecors, sortedDecorInfo
   if (state->row == -1) {
     decor_redraw_start(wp, row, state);
@@ -687,45 +699,58 @@ next_mark:
 
   int new_i = 0;
   for (int i = 0; i < cur_end; i++) {
-    int info = infos[i];
-    DecorRange *range = ranges + info;
+    int range_i = infos[i];
+    DecorRange *item = ranges + range_i;
 
-    if (range->end_col >= col) {
-      col_until = MIN(col_until, range->end_col);
-
-      if (range->attr_id > 0) {
-        attr = hl_combine_attr(attr, range->attr_id);
+    bool active = false, keep = true;
+    if (item->end_row < row || (item->end_row == row && item->end_col <= col)) {
+      if (!(item->start_row >= row && decor_virt_pos(item))) {
+        keep = false;
       }
-
-      if (range->kind == kDecorKindHighlight && (range->data.sh.flags & kSHConceal)) {
+    } else {
+      active = true;
+      if (item->end_row == row) {
+        state->col_until = MIN(state->col_until, item->end_col - 1);
+      }
+    }
+    if(active) {
+      if (item->attr_id > 0) {
+        attr = hl_combine_attr(attr, item->attr_id);
+      }
+      if (item->kind == kDecorKindHighlight && (item->data.sh.flags & kSHConceal)) {
         conceal = 1;
-        if (range->start_row == row && range->start_col == col) {
-          DecorSignHighlight *sh = &range->data.sh;
+        if (item->start_row == state->row && item->start_col == col) {
+          DecorSignHighlight *sh = &item->data.sh;
           conceal = 2;
           conceal_char = sh->text[0];
-          col_until = MIN(col_until, range->start_col);
-          conceal_attr = range->attr_id;
+          state->col_until = MIN(state->col_until, item->start_col);
+          conceal_attr = item->attr_id;
         }
       }
-
-      if (range->kind == kDecorKindHighlight) {
-        if (range->data.sh.flags & kSHSpellOn) {
+      if (item->kind == kDecorKindHighlight) {
+        if (item->data.sh.flags & kSHSpellOn) {
           spell = kTrue;
-        } else if (range->data.sh.flags & kSHSpellOff) {
+        } else if (item->data.sh.flags & kSHSpellOff) {
           spell = kFalse;
         }
-        if (range->data.sh.url != NULL) {
-          attr = hl_add_url(attr, range->data.sh.url);
+        if (item->data.sh.url != NULL) {
+          attr = hl_add_url(attr, item->data.sh.url);
         }
       }
-
-      if (decor_virt_pos(range) && range->draw_col == -10) {
-        decor_init_draw_col(win_col, hidden, range);
+    }
+    if (item->start_row == state->row
+        && decor_virt_pos(item) && item->draw_col == -10) {
+      decor_init_draw_col(win_col, hidden, item);
+    }
+    if (keep) {
+      infos[new_i++] = range_i;
+    } else if (item->owned) {
+      if (item->kind == kDecorKindVirtText) {
+        clear_virttext(&item->data.vt->data.virt_text);
+        xfree(item->data.vt);
+      } else if (item->kind == kDecorKindHighlight) {
+        xfree((void *)item->data.sh.url);
       }
-
-      infos[new_i++] = info;
-    } else if (range->start_row == state->row && decor_virt_pos(range)) {
-      infos[new_i++] = info;
     }
   }
 
