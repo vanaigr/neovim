@@ -1696,32 +1696,9 @@ int win_line(win_T *wp, linenr_T lnum, int startrow, int endrow, int col_rows, s
           }
           decor_need_recheck = false;
         }
-
-        struct timespec ts, ts2;
-        clock_gettime(CLOCK_MONOTONIC, &ts);
-
             extmark_attr = decor_redraw_col(wp, (colnr_T)(ptr - line),
                                             may_have_inline_virt ? -3 : wlv.off,
                                             selected, &decor_state);
-        clock_gettime(CLOCK_MONOTONIC, &ts2);
-
-        FILE *file = fopen("/home/artarar/neovim/gl.txt", "a");
-        long ns1 = ts.tv_sec * 1000000000 + ts.tv_nsec;
-        long ns2 = ts2.tv_sec * 1000000000 + ts2.tv_nsec;
-        fprintf(
-          file,
-          "Diff for %ld: %ld -- %d. %d-%d, %d-%d\n",
-          ptr - line,
-          ns2 - ns1,
-          ccount[0],
-          ccount[1],
-          ccount[2],
-          ccount[3],
-          ccount[4]
-        );
-        memset(ccount, 0, 256*4);
-        fclose(file);
-
         if (may_have_inline_virt) {
           handle_inline_virtual_text(wp, &wlv, ptr - line, selected);
           if (wlv.n_extra > 0 && wlv.virt_inline_hl_mode <= kHlModeReplace) {

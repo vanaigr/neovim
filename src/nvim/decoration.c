@@ -708,10 +708,6 @@ next_mark:
   int cur_end = state->current_end;
   int fut_beg = state->future_begin;
 
-  ccount[0] = count;
-  ccount[1] = cur_end;
-  ccount[2] = fut_beg;
-
   for(; fut_beg < count; fut_beg++) {
     int index = indices[fut_beg];
     DecorRange *range = &slots[index].range;
@@ -752,9 +748,6 @@ next_mark:
   schar_T conceal_char = 0;
   int conceal_attr = 0;
   TriState spell = kNone;
-
-  ccount[3] = cur_end;
-  ccount[4] = fut_beg;
 
   for (int i = 0; i < cur_end; i++) {
     int index = indices[i];
