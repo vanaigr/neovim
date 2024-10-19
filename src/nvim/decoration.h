@@ -58,31 +58,13 @@ typedef struct {
 } DecorRange;
 
 typedef struct {
-  int decor_index;
-  int end_col;
-} DecorInfoCur;
-
-typedef struct {
-  int decor_index;
-  DecorPriority priority;
-} DecorInfoFuture;
-
-// Keep this small, this is copied often. Only decor_index is needed,
-// the rest is duplicate data from `allDecors` that speeds up lookups.
-typedef union {
-  DecorInfoCur cur;
-  DecorInfoFuture future;
-} DecorInfo;
-
-typedef struct {
   MarkTreeIter itr[1];
   kvec_t(DecorRange) allDecors;
   /// Array containing currently active decor indices, and
   /// indices of decors that start at subsequent columns.
-  /// Currently active are sorted by DecorRange.priority, range_index.
-  /// Future are sorted by DecorRange.start_row, DecorRange.start_col,
-  /// priority, range_index.
-  kvec_t(DecorInfo) sortedDecorInfo;
+  /// Currently active are sorted by priority, index.
+  /// Future are sorted by start_row, start_col, index.
+  kvec_t(int) sortedDecorInfo;
   /// Currently active decors are in [0; cur_end).
   int cur_end;
   /// Decors that will become active later

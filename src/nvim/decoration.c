@@ -501,7 +501,7 @@ static void decor_range_insert(DecorState *state, DecorRange range)
   kv_push(state->allDecors, range);
 
   DecorRange *ranges = &kv_A(state->allDecors, 0);
-  DecorInfo *infos = &kv_A(state->sortedDecorInfo, 0);
+  int *infos = &kv_A(state->sortedDecorInfo, 0);
 
   uint64_t range_pos = ((uint64_t)range.start_row << 32) | range.start_col;
   int orig_size = (int)kv_size(state->sortedDecorInfo);
@@ -510,13 +510,12 @@ static void decor_range_insert(DecorState *state, DecorRange range)
   int end = orig_size;
   while(begin < end) {
     int mid = begin + ((end - begin) >> 1);
-    DecorInfoFuture other = infos[mid].future;
-    DecorRange *o_range = ranges + other.decor_index;
+    int other = infos[mid];
+    DecorRange *o_range = ranges + other;
     uint64_t other_pos = ((uint64_t)o_range->start_row << 32) | o_range->start_col;
 
     // if everything is equal, new ranges are considered to have higher priority
-    if(other_pos < range_pos
-      || (other_pos == range_pos && other.priority <= range.priority)) {
+    if(other_pos <= range_pos) {
       begin = mid + 1;
     }
     else {
@@ -525,11 +524,9 @@ static void decor_range_insert(DecorState *state, DecorRange range)
   }
 
   kv_pushp(state->sortedDecorInfo);
-  DecorInfo *pos = &kv_A(state->sortedDecorInfo, begin);
+  int *pos = &kv_A(state->sortedDecorInfo, begin);
   memmove(pos, pos + sizeof(*pos), (orig_size - begin) * sizeof(*pos));
-  *pos = (DecorInfo){
-    .future = { .priority = range.priority, .decor_index = decor_index },
-  };
+  *pos = decor_index;
 }
 
 void decor_range_add_virt(DecorState *state, int start_row, int start_col, int end_row, int end_col,
@@ -643,24 +640,26 @@ next_mark:
 
   int const row = state->row;
   int const f_end = kv_size(state->sortedDecorInfo);
-  DecorInfo *const infos = &kv_A(state->sortedDecorInfo, 0);
+  int *const infos = &kv_A(state->sortedDecorInfo, 0);
   DecorRange *const ranges = &kv_A(state->allDecors, 0);
   int cur_end = state->cur_end;
   int future_start = state->future_start;
 
   for(; future_start < f_end; future_start++) {
-    DecorInfoFuture fi = infos[future_start].future;
-    DecorRange *fr = ranges + fi.decor_index;
-    if(fr->start_row != row || fr->start_col != col) break;
-    DecorPriority f_priority = fr->priority;
+    int index = infos[future_start];
+    DecorRange *range = ranges + index;
+    if(range->start_row != row || range->start_col != col) break;
+    DecorPriority priority = range->priority;
 
     int begin = 0;
     int end = cur_end;
-    while(begin < end) {
+    while (begin < end) {
       int mid = begin + ((end - begin) >> 1);
-      DecorInfoCur ci = infos[mid].cur;
-      DecorRange *cr = ranges + ci.decor_index;
-      if(cr->priority <= f_priority) {
+      int ci = infos[mid];
+      DecorRange *cr = ranges + ci;
+
+      int cr_p = cr->priority;
+      if(cr_p < priority || (cr_p == priority && ci < index)) {
         begin = mid + 1;
       }
       else {
@@ -668,19 +667,14 @@ next_mark:
       }
     }
 
-    DecorInfo *pos = infos + begin;
+    int *pos = infos + begin;
     memmove(pos, pos + sizeof(*pos), (cur_end - begin) * sizeof(*pos));
-    *pos = (DecorInfo){
-      .cur = {
-        .end_col = ranges[fi.decor_index].end_col,
-        .decor_index = fi.decor_index,
-      },
-    };
+    *pos = index;
     cur_end++;
   }
 
   if(future_start < f_end) {
-    int start_col = ranges[infos[future_start].future.decor_index].start_col;
+    int start_col = ranges[infos[future_start]].start_col;
     col_until = MIN(col_until, start_col);
   }
 
@@ -693,43 +687,46 @@ next_mark:
 
   int new_i = 0;
   for (int i = 0; i < cur_end; i++) {
-    DecorInfoCur info = infos[i].cur;
-    DecorRange *range = ranges + info.decor_index;
+    int info = infos[i];
+    DecorRange *range = ranges + info;
 
-    if (info.end_col < col) {
-      continue;
-    }
+    if (range->end_col >= col) {
+      col_until = MIN(col_until, range->end_col);
 
-    col_until = MIN(col_until, info.end_col);
-
-    if (range->attr_id > 0) {
-      attr = hl_combine_attr(attr, range->attr_id);
-    }
-    if (range->kind == kDecorKindHighlight && (range->data.sh.flags & kSHConceal)) {
-      conceal = 1;
-      if (range->start_row == row && range->start_col == col) {
-        DecorSignHighlight *sh = &range->data.sh;
-        conceal = 2;
-        conceal_char = sh->text[0];
-        col_until = MIN(col_until, range->start_col);
-        conceal_attr = range->attr_id;
+      if (range->attr_id > 0) {
+        attr = hl_combine_attr(attr, range->attr_id);
       }
-    }
-    if (range->kind == kDecorKindHighlight) {
-      if (range->data.sh.flags & kSHSpellOn) {
-        spell = kTrue;
-      } else if (range->data.sh.flags & kSHSpellOff) {
-        spell = kFalse;
-      }
-      if (range->data.sh.url != NULL) {
-        attr = hl_add_url(attr, range->data.sh.url);
-      }
-    }
-    if (decor_virt_pos(range) && range->draw_col == -10) {
-      decor_init_draw_col(win_col, hidden, range);
-    }
 
-    infos[new_i++] = (DecorInfo){ .cur = info };
+      if (range->kind == kDecorKindHighlight && (range->data.sh.flags & kSHConceal)) {
+        conceal = 1;
+        if (range->start_row == row && range->start_col == col) {
+          DecorSignHighlight *sh = &range->data.sh;
+          conceal = 2;
+          conceal_char = sh->text[0];
+          col_until = MIN(col_until, range->start_col);
+          conceal_attr = range->attr_id;
+        }
+      }
+
+      if (range->kind == kDecorKindHighlight) {
+        if (range->data.sh.flags & kSHSpellOn) {
+          spell = kTrue;
+        } else if (range->data.sh.flags & kSHSpellOff) {
+          spell = kFalse;
+        }
+        if (range->data.sh.url != NULL) {
+          attr = hl_add_url(attr, range->data.sh.url);
+        }
+      }
+
+      if (decor_virt_pos(range) && range->draw_col == -10) {
+        decor_init_draw_col(win_col, hidden, range);
+      }
+
+      infos[new_i++] = info;
+    } else if (range->start_row == state->row && decor_virt_pos(range)) {
+      infos[new_i++] = info;
+    }
   }
 
   state->current = attr;
