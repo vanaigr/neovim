@@ -402,18 +402,25 @@ bool decor_redraw_reset(win_T *wp, DecorState *state)
   state->row = -1;
   state->win = wp;
 
-  size_t count = kv_size(state->ranges_i);
-  int *indices = &kv_A(state->ranges_i, 0);
-  DecorRangeSlot *slots = &kv_A(state->slots, 0);
+  int *const indices = &kv_A(state->ranges_i, 0);
+  DecorRangeSlot *const slots = &kv_A(state->slots, 0);
 
-  for (size_t i = 0; i < count; i++) {
-    int index = indices[i];
-    DecorRangeSlot *slot = slots + index;
-    DecorRange *range = &slot->range;
+  int begin_i[] = { 0, state->future_begin };
+  int end_i[] = { state->current_end, (int)kv_size(state->ranges_i) };
 
-    if (range->owned && range->kind == kDecorKindVirtText) {
-      clear_virttext(&range->data.vt->data.virt_text);
-      xfree(range->data.vt);
+  for(int pos_i = 0; pos_i < 2; pos_i++) {
+    int begin = begin_i[pos_i];
+    int end = end_i[pos_i];
+
+    for(int i = begin; i < end; i++) {
+      int index = indices[i];
+      DecorRangeSlot *slot = slots + index;
+      DecorRange *range = &slot->range;
+
+      if (range->owned && range->kind == kDecorKindVirtText) {
+        clear_virttext(&range->data.vt->data.virt_text);
+        xfree(range->data.vt);
+      }
     }
   }
 
@@ -470,15 +477,14 @@ bool decor_redraw_start(win_T *wp, int top_row, DecorState *state)
 bool decor_redraw_line(win_T *wp, int row, DecorState *state)
 {
   int count = (int)kv_size(state->ranges_i);
-  int cur_end = state->current_end;
+  int const cur_end = state->current_end;
   int fut_beg = state->future_begin;
 
   if(fut_beg == count) {
     fut_beg = count = cur_end;
   } else if(fut_beg != cur_end) {
-    memmove(&kv_A(state->ranges_i, cur_end),
-            &kv_A(state->ranges_i, fut_beg),
-            (count - fut_beg) * sizeof(kv_A(state->ranges_i, 0)));
+    int *const indices = &kv_A(state->ranges_i, 0);
+    memmove(indices + cur_end, indices + fut_beg, (count - fut_beg) * sizeof(*indices));
 
     count = cur_end + (count - fut_beg);
     fut_beg = cur_end;
@@ -495,7 +501,7 @@ bool decor_redraw_line(win_T *wp, int row, DecorState *state)
   state->col_until = -1;
   state->eol_col = -1;
 
-  if (state->current_end != 0 || state->future_begin != (int)kv_size(state->ranges_i)) {
+  if (cur_end != 0 || fut_beg != count) {
     return true;
   }
 
@@ -528,9 +534,7 @@ static void decor_range_add_from_inline(DecorState *state, int start_row, int st
 static void decor_range_insert(DecorState *state, DecorRange *range)
 {
   range->ordering = state->new_range_ordering++;
-
-  uint64_t pos = range_pos(range);
-  uint64_t order = range_order(range);
+  int const row = range->start_row, col = range->start_col;
 
   int index;
   if(state->free_slot_i >= 0) {
@@ -543,21 +547,22 @@ static void decor_range_insert(DecorState *state, DecorRange *range)
     kv_pushp(state->slots)->range = *range;
   }
 
-  size_t count = kv_size(state->ranges_i);
-  int *indices = &kv_A(state->ranges_i, 0);
-  DecorRangeSlot *slots = &kv_A(state->slots, 0);
+  int const count = kv_size(state->ranges_i);
+  int *const indices = &kv_A(state->ranges_i, 0);
+  DecorRangeSlot *const slots = &kv_A(state->slots, 0);
 
-  size_t begin = state->future_begin;
-  size_t end = count;
+  int begin = state->future_begin;
+  int end = count;
   while(begin < end) {
     int mid = begin + ((end - begin) >> 1);
     int mindex = indices[mid];
     DecorRange *mr = &slots[mindex].range;
-    uint64_t mpos = range_pos(mr);
-    uint64_t morder = range_order(mr);
-
-    if(mpos < pos || (mpos == pos && morder < order)) {
+    int mrow = mr->start_row, mcol = mr->start_col;
+    if(mrow < row || (mrow == row && mcol <= col)) {
       begin = mid + 1;
+      if(mrow == row && mcol == col) {
+        break;
+      }
     } else {
       end = mid;
     }
@@ -635,11 +640,11 @@ void decor_init_draw_col(int win_col, bool hidden, DecorRange *item)
 
 void decor_recheck_draw_col(int win_col, bool hidden, DecorState *state)
 {
-  size_t count = kv_size(state->ranges_i);
-  int *indices = &kv_A(state->ranges_i, 0);
-  DecorRangeSlot *slots = &kv_A(state->slots, 0);
+  int const count = state->current_end;
+  int *const indices = &kv_A(state->ranges_i, 0);
+  DecorRangeSlot *const slots = &kv_A(state->slots, 0);
 
-  for (size_t i = 0; i < count; i++) {
+  for (int i = 0; i < count; i++) {
     int index = indices[i];
     DecorRange *range = &slots[index].range;
     if(range->draw_col == -3) {
@@ -648,30 +653,17 @@ void decor_recheck_draw_col(int win_col, bool hidden, DecorState *state)
   }
 }
 
-static inline uint64_t compress_pos(int row, int col)
-  FUNC_ATTR_PURE FUNC_ATTR_ALWAYS_INLINE {
-  uint32_t r = (uint32_t)row + (uint32_t)INT_MIN;
-  uint32_t c = (uint32_t)col + (uint32_t)INT_MIN;
-  return ((uint64_t)r << 32) | (uint64_t)c;
-}
-
-static inline uint64_t range_pos(DecorRange const *range)
-  FUNC_ATTR_PURE FUNC_ATTR_ALWAYS_INLINE {
-  return compress_pos(range->start_row, range->start_col);
-}
-
-static inline uint64_t range_order(DecorRange const *range)
-  FUNC_ATTR_PURE FUNC_ATTR_ALWAYS_INLINE {
-  return ((uint64_t)range->priority << 32) | (uint64_t)range->ordering;
-}
-
-int ccount[256];
+// int ccount[256];
+// #include<stdio.h>
 
 int decor_redraw_col(win_T *wp, int col, int win_col, bool hidden, DecorState *state)
 {
   buf_T *buf = wp->w_buffer;
   int col_until = state->col_until;
+  // FILE *f = fopen("/home/vanaigr/neovim/gl.txt", "a");
   if (col <= col_until) {
+    // fprintf(f, "At col %d\n", col);
+    // fclose(f);
     return state->current;
   }
   col_until = MAXCOL;
@@ -702,17 +694,21 @@ next_mark:
 
   int *const indices = &kv_A(state->ranges_i, 0);
   DecorRangeSlot *const slots = &kv_A(state->slots, 0);
-  uint64_t const pos = compress_pos(row, col);
 
   int count = (int)kv_size(state->ranges_i);
   int cur_end = state->current_end;
   int fut_beg = state->future_begin;
 
+  // fprintf(f, "At col %d:\n", col);
+
   for(; fut_beg < count; fut_beg++) {
-    int index = indices[fut_beg];
-    DecorRange *range = &slots[index].range;
-    if(range_pos(range) > pos) break;
-    uint64_t order = range_order(range);
+    int const index = indices[fut_beg];
+    DecorRange *const range = &slots[index].range;
+    if(range->start_row > row || (range->start_row == row && range->start_col > col)) {
+      break;
+    }
+    int const ordering = range->ordering;
+    DecorPriority const priority = range->priority;
 
     int begin = 0;
     int end = cur_end;
@@ -720,28 +716,43 @@ next_mark:
       int mid = begin + ((end - begin) >> 1);
       int mi = indices[mid];
       DecorRange *mr = &slots[mi].range;
-      uint64_t mo = range_order(mr);
-      if(mo < order) {
+      if(mr->priority < priority || (mr->priority == priority && mr->ordering < ordering)) {
         begin = mid + 1;
       } else {
         end = mid;
       }
     }
 
-    int *item = indices + begin;
-    memmove(item, item + sizeof(*item), (cur_end - begin) * sizeof(*item));
+    //fprintf(f, "  added: ");
+    //if(range->kind == kDecorKindVirtText) {
+    //  fprintf(f, "virtual text with: %d", range->data.vt->pos);
+    //}
+    //fprintf(f, "\n");
+
+    int *const item = indices + begin;
+    memmove(item + 1, item, (cur_end - begin) * sizeof(*item));
     *item = index;
     cur_end++;
   }
 
+  /* for(int j = fut_beg; j < count; j++) {
+    int const index = indices[j];
+    DecorRange *const range = &slots[index].range;
+    fprintf(f, "  remained: ");
+    if(range->kind == kDecorKindVirtText) {
+      fprintf(f, "virtual text with: %d", range->data.vt->pos);
+    }
+    fprintf(f, "\n");
+  } */
+
   if(fut_beg != count) {
     DecorRange *r = &slots[indices[fut_beg]].range;
     if(r->start_row == row) {
-      col_until = r->start_col;
+      col_until = MIN(col_until, r->start_col - 1);
     }
   }
 
-  size_t new_cur_end = 0;
+  int new_cur_end = 0;
 
   int attr = 0;
   int conceal = 0;
@@ -754,8 +765,14 @@ next_mark:
     DecorRangeSlot *slot = slots + index;
     DecorRange *range = &slot->range;
 
+    //fprintf(f, "  current: ");
+    //if(range->kind == kDecorKindVirtText) {
+    //  fprintf(f, "virtual text with: %d", range->data.vt->pos);
+    //}
+    //fprintf(f, "\n");
+
     bool keep = true;
-    if(compress_pos(range->end_row, range->end_col) <= pos) {
+    if(range->end_row < row || (range->end_row == row && range->end_col <= col)) {
       keep = range->start_row >= row && decor_virt_pos(range);
     } else {
       if (range->end_row == row && range->end_col > col) {
@@ -771,7 +788,7 @@ next_mark:
           DecorSignHighlight *sh = &range->data.sh;
           conceal = 2;
           conceal_char = sh->text[0];
-          state->col_until = MIN(state->col_until, range->start_col);
+          col_until = MIN(col_until, range->start_col);
           conceal_attr = range->attr_id;
         }
       }
@@ -787,7 +804,8 @@ next_mark:
       }
     }
 
-    if (decor_virt_pos(range) && range->draw_col == -10) {
+    if (range->start_row == row && range->start_col <= col
+        && decor_virt_pos(range) && range->draw_col == -10) {
       decor_init_draw_col(win_col, hidden, range);
     }
 
@@ -809,6 +827,8 @@ next_mark:
     }
   }
   cur_end = new_cur_end;
+
+  //fclose(f);
 
   if(fut_beg == count) {
     fut_beg = count = cur_end;
@@ -1030,8 +1050,7 @@ bool decor_redraw_eol(win_T *wp, DecorState *state, int *eol_attr, int eol_col)
       has_virt_pos = true;
     }
 
-    if (range->kind == kDecorKindHighlight
-        && (range->data.sh.flags & kSHHlEol) && range->start_row <= state->row) {
+    if (range->kind == kDecorKindHighlight && (range->data.sh.flags & kSHHlEol)) {
       *eol_attr = hl_combine_attr(*eol_attr, range->attr_id);
     }
   }

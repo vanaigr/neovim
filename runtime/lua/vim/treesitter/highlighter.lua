@@ -309,7 +309,7 @@ local function on_line_impl(self, buf, line, is_spell_nav)
         state.highlighter_query:query():iter_captures(root_node, self.bufnr, line, root_end_row + 1)
     end
 
-    local ss = vim.loop.hrtime()
+    --local ss = vim.loop.hrtime()
     while line >= state.next_row do
       local capture, node, metadata, match = state.iter(line)
 
@@ -355,8 +355,8 @@ local function on_line_impl(self, buf, line, is_spell_nav)
         state.next_row = start_row
       end
     end
-    local ee = vim.loop.hrtime()
-    print('line', line, (ee - ss) / 1000)
+    --local ee = vim.loop.hrtime()
+    --print('line', line, (ee - ss) / 1000)
   end)
 end
 

@@ -30,10 +30,10 @@ typedef enum {
 } DecorRangeKind;
 
 typedef struct {
-  int start_col;
   int start_row;
-  int end_col;
+  int start_col;
   int end_row;
+  int end_col;
   int ordering;
   DecorPriority priority;
   bool owned;   ///< ephemeral decoration, free memory immediately
@@ -67,10 +67,14 @@ typedef struct {
   MarkTreeIter itr[1];
   kvec_t(DecorRangeSlot) slots;
   kvec_t(int) ranges_i;
+  /// Indices in [0; current_end) range of `ranges_i` point to ranges that start before the
+  /// current position and are sorted by priority and order of insertion.
   int current_end;
+  /// Indices in [future_begin, kv_size(ranges_i)) range of `ranges_i` point to ranges that
+  /// Start after the current position and are sorted by starting position.
   int future_begin;
-  int free_slot_i;
-  int new_range_ordering; ///< increasing index for the newly added slot, for ordering.
+  int free_slot_i; ///< Index of the last free slot.
+  int new_range_ordering; ///< Index for keeping track range of insertion order.
   win_T *win;
   int top_row;
   int row;

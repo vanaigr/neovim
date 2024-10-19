@@ -251,16 +251,16 @@ static int line_putchar(buf_T *buf, const char **pp, schar_T *dest, int maxcells
 
 static void draw_virt_text(win_T *wp, buf_T *buf, int col_off, int *end_col, int win_row)
 {
-  DecorState *state = &decor_state;
-  const int max_col = wp->w_grid.cols;
+  DecorState *const state = &decor_state;
+  int const max_col = wp->w_grid.cols;
+  bool const do_eol = state->eol_col > -1;
   int right_pos = max_col;
-  bool do_eol = state->eol_col > -1;
 
-  size_t count = state->current_end;
-  int *indices = &kv_A(state->ranges_i, 0);
-  DecorRangeSlot *slots = &kv_A(state->slots, 0);
+  int const count = state->current_end;
+  int *const indices = &kv_A(state->ranges_i, 0);
+  DecorRangeSlot *const slots = &kv_A(state->slots, 0);
 
-  for (size_t i = 0; i < count; i++) {
+  for (int i = 0; i < count; i++) {
     int index = indices[i];
     DecorRange *range = &slots[index].range;
 
@@ -1696,9 +1696,9 @@ int win_line(win_T *wp, linenr_T lnum, int startrow, int endrow, int col_rows, s
           }
           decor_need_recheck = false;
         }
-            extmark_attr = decor_redraw_col(wp, (colnr_T)(ptr - line),
-                                            may_have_inline_virt ? -3 : wlv.off,
-                                            selected, &decor_state);
+        extmark_attr = decor_redraw_col(wp, (colnr_T)(ptr - line),
+                                        may_have_inline_virt ? -3 : wlv.off,
+                                        selected, &decor_state);
         if (may_have_inline_virt) {
           handle_inline_virtual_text(wp, &wlv, ptr - line, selected);
           if (wlv.n_extra > 0 && wlv.virt_inline_hl_mode <= kHlModeReplace) {
