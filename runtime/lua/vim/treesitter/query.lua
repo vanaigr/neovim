@@ -860,8 +860,14 @@ function Query:iter_captures(node, source, start, stop)
 
   local cursor = vim._create_ts_querycursor(node, self.query, start, stop, { match_limit = 256 })
 
-  local apply_directives = memoize(match_id_hash, self.apply_directives, true)
-  local match_preds = memoize(match_id_hash, self.match_preds, true)
+  local last_matches_ids = {}
+  local last_matches_metadata = {}
+  local highest_match_id = -math.huge
+  for i = 1, 30 do
+    table.insert(last_matches_ids, -math.huge)
+    table.insert(last_matches_metadata, {})
+  end
+  local new_match_i = 1
 
   local function iter(end_line)
     local capture, captured_node, match = cursor:next_capture()
@@ -870,8 +876,17 @@ function Query:iter_captures(node, source, start, stop)
       return
     end
 
-    if not match_preds(self, match, source) then
-      local match_id = match:info()
+    local match_id = match:info()
+
+    if match_id <= highest_match_id then
+      for i, v in ipairs(last_matches_ids) do
+        if v == match_id then
+          return capture, captured_node, last_matches_metadata[i], match
+        end
+      end
+    end
+
+    if not self:match_preds(match, source) then
       cursor:remove_match(match_id)
       if end_line and captured_node:range() > end_line then
         return nil, captured_node, nil, nil
@@ -879,7 +894,19 @@ function Query:iter_captures(node, source, start, stop)
       return iter(end_line) -- tail call: try next match
     end
 
-    local metadata = apply_directives(self, match, source)
+    local metadata = self:apply_directives(match, source)
+
+    last_matches_ids[new_match_i] = match_id
+    last_matches_metadata[new_match_i] = metadata
+    if highest_match_id < match_id then
+      highest_match_id = match_id
+    end
+
+    if new_match_i == #last_matches_ids then
+      new_match_i = 1
+    else
+      new_match_i = new_match_i + 1
+    end
 
     return capture, captured_node, metadata, match
   end

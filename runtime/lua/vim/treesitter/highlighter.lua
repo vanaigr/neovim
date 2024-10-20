@@ -291,6 +291,7 @@ end
 ---@param line integer
 ---@param is_spell_nav boolean
 local function on_line_impl(self, buf, line, is_spell_nav)
+  local ss = vim.uv.hrtime()
   self:for_each_highlight_state(function(state)
     local root_node = state.tstree:root()
     local root_start_row, _, root_end_row, _ = root_node:range()
@@ -355,6 +356,8 @@ local function on_line_impl(self, buf, line, is_spell_nav)
       end
     end
   end)
+  local ee = vim.uv.hrtime()
+  print('line: ', (ee - ss) / 1000000)
 end
 
 ---@private
