@@ -482,6 +482,19 @@ local predicate_handlers = {
 predicate_handlers['vim-match?'] = predicate_handlers['match?']
 predicate_handlers['any-vim-match?'] = predicate_handlers['any-match?']
 
+_G.__bench = { times = {}, counts = {} }
+
+for k, v in pairs(predicate_handlers) do
+  predicate_handlers[k] = function(...)
+    local ss = vim.uv.hrtime()
+    local res = v(...)
+    local ee = vim.uv.hrtime()
+    _G.__bench.times[k] = (_G.__bench.times[k] or 0) + (ee - ss) / 1000
+    _G.__bench.counts[k] = (_G.__bench.counts[k] or 0) + 1
+    return res
+  end
+end
+
 ---@nodoc
 ---@class vim.treesitter.query.TSMetadata
 ---@field range? Range

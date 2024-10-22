@@ -291,6 +291,7 @@ end
 ---@param line integer
 ---@param is_spell_nav boolean
 local function on_line_impl(self, buf, line, is_spell_nav)
+  local options = {}
   local ss = vim.uv.hrtime()
   self:for_each_highlight_state(function(state)
     local root_node = state.tstree:root()
@@ -338,16 +339,15 @@ local function on_line_impl(self, buf, line, is_spell_nav)
         local url = get_url(match, buf, capture, metadata)
 
         if hl and end_row >= line and (not is_spell_nav or spell ~= nil) then
-          api.nvim_buf_set_extmark(buf, ns, start_row, start_col, {
-            end_line = end_row,
-            end_col = end_col,
-            hl_group = hl,
-            ephemeral = true,
-            priority = priority,
-            conceal = conceal,
-            spell = spell,
-            url = url,
-          })
+            options.end_line = end_row
+            options.end_col = end_col
+            options.hl_group = hl
+            options.ephemeral = true
+            options.priority = priority
+            options.conceal = conceal
+            options.spell = spell
+            options.url = url
+          api.nvim_buf_set_extmark(buf, ns, start_row, start_col, options)
         end
       end
 
@@ -357,7 +357,7 @@ local function on_line_impl(self, buf, line, is_spell_nav)
     end
   end)
   local ee = vim.uv.hrtime()
-  print('line: ', (ee - ss) / 1000000)
+  -- print('line: ', (ee - ss) / 1000000)
 end
 
 ---@private
@@ -414,6 +414,25 @@ api.nvim_set_decoration_provider(ns, {
   on_win = TSHighlighter._on_win,
   on_line = TSHighlighter._on_line,
   _on_spell_nav = TSHighlighter._on_spell_nav,
+  on_start = function()
+    if _G.__bench then
+      _G.__bench.times = {}
+      _G.__bench.counts = {}
+    end
+  end,
+  on_end = function()
+if true then return end
+    local res = {}
+    if _G.__bench then
+      for k, v in pairs(_G.__bench.times) do
+        table.insert(res, { k, v / _G.__bench.counts[k] })
+      end
+      table.sort(res, function(a, b) return a[2] < b[2] end)
+      print(vim.inspect(res))
+    else
+      print('doesnt exist')
+    end
+  end
 })
 
 return TSHighlighter
