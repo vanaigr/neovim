@@ -276,11 +276,15 @@ local function get_spell(capture_name)
   return nil, 0
 end
 
+local GG = {}
+
 ---@param self vim.treesitter.highlighter
 ---@param buf integer
 ---@param line integer
 ---@param is_spell_nav boolean
 local function on_line_impl(self, buf, line, is_spell_nav)
+
+local ss = vim.uv.hrtime()
   self:for_each_highlight_state(function(state)
     local root_node = state.tstree:root()
     local root_start_row, _, root_end_row, _ = root_node:range()
@@ -345,6 +349,9 @@ local function on_line_impl(self, buf, line, is_spell_nav)
       end
     end
   end)
+
+  local ee = vim.uv.hrtime()
+  table.insert(GG, (ee - ss) * 0.000001)
 end
 
 ---@private
@@ -398,9 +405,13 @@ function TSHighlighter._on_win(_, _win, buf, topline, botline)
 end
 
 api.nvim_set_decoration_provider(ns, {
+  on_start = function() GG = {} end,
   on_win = TSHighlighter._on_win,
   on_line = TSHighlighter._on_line,
   _on_spell_nav = TSHighlighter._on_spell_nav,
+  on_end = function()
+    print(vim.inspect(GG))
+  end
 })
 
 return TSHighlighter

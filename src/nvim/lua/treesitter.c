@@ -1413,7 +1413,8 @@ static int querymatch_info(lua_State *L)
   TSQueryMatch *match = luaL_checkudata(L, 1, TS_META_QUERYMATCH);
   lua_pushinteger(L, match->id);
   lua_pushinteger(L, match->pattern_index + 1);
-  return 2;
+  lua_pushinteger(L, match->capture_count);
+  return 3;
 }
 
 static int querymatch_captures(lua_State *L)
