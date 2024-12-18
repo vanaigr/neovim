@@ -276,7 +276,7 @@ local function get_spell(capture_name)
   return nil, 0
 end
 
-local GG = {}
+--local GG = {}
 
 ---@param self vim.treesitter.highlighter
 ---@param buf integer
@@ -284,7 +284,7 @@ local GG = {}
 ---@param is_spell_nav boolean
 local function on_line_impl(self, buf, line, is_spell_nav)
 
-local ss = vim.uv.hrtime()
+--local ss = vim.uv.hrtime()
   self:for_each_highlight_state(function(state)
     local root_node = state.tstree:root()
     local root_start_row, _, root_end_row, _ = root_node:range()
@@ -303,6 +303,8 @@ local ss = vim.uv.hrtime()
         state.highlighter_query:query():iter_captures(root_node, self.bufnr, line, root_end_row + 1)
     end
 
+    local captures = state.highlighter_query:query().captures
+
     while line >= state.next_row do
       local capture, node, metadata, match = state.iter(line)
 
@@ -315,7 +317,7 @@ local ss = vim.uv.hrtime()
       if capture then
         local hl = state.highlighter_query:get_hl_from_capture(capture)
 
-        local capture_name = state.highlighter_query:query().captures[capture]
+        local capture_name = captures[capture]
 
         local spell, spell_pri_offset = get_spell(capture_name)
 
@@ -350,8 +352,8 @@ local ss = vim.uv.hrtime()
     end
   end)
 
-  local ee = vim.uv.hrtime()
-  table.insert(GG, (ee - ss) * 0.000001)
+  --local ee = vim.uv.hrtime()
+  --table.insert(GG, (ee - ss) * 0.000001)
 end
 
 ---@private
@@ -405,13 +407,13 @@ function TSHighlighter._on_win(_, _win, buf, topline, botline)
 end
 
 api.nvim_set_decoration_provider(ns, {
-  on_start = function() GG = {} end,
+  --on_start = function() GG = {} end,
   on_win = TSHighlighter._on_win,
   on_line = TSHighlighter._on_line,
   _on_spell_nav = TSHighlighter._on_spell_nav,
-  on_end = function()
-    print(vim.inspect(GG))
-  end
+  --on_end = function()
+  --  print(vim.inspect(GG))
+  --end
 })
 
 return TSHighlighter
