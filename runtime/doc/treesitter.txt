@@ -1285,7 +1285,7 @@ lint({buf}, {opts})                              *vim.treesitter.query.lint()*
     Use |treesitter-parsers| in runtimepath to check the query file in {buf}
     for errors:
     • verify that used nodes are valid identifiers in the grammar.
-    • verify that predicates and directives are valid.
+    • verify that guards and directives are valid.
     • verify that top-level s-expressions are valid.
 
     The found diagnostics are reported using |diagnostic-api|. By default, the

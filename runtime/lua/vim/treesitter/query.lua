@@ -8,48 +8,51 @@ local function is_directive(name)
   return string.sub(name, -1) == '!'
 end
 
----@alias Pattern (integer|string)[]
+---A predicate is a list of (integer|string); integer represents `capture_id`, and
+---string represents (literal) arguments to predicate. A predicate is either a guard
+---or a directive. See |treesitter-predicates| and |treesitter-directives| for more details.
+---@alias Predicate (integer|string)[]
 
 ---@nodoc
----@class ProcessedPredicate
----@field [1] string predicate name
----@field [2] boolean should match
----@field [3] Pattern
+---@class ProcessedGuard
+---@field [1] string handler name
+---@field [2] boolean whether it should match
+---@field [3] Predicate
 
----@alias ProcessedDirective Pattern
----@alias ProcessedPattern { preds: ProcessedPredicate[], directives: ProcessedDirective[] }
+---@alias ProcessedDirective Predicate
+---@alias ProcessedPattern { guards: ProcessedGuard[], directives: ProcessedDirective[] }
 
---- Splits the query patterns into predicates and directives.
----@param patterns table<integer, Pattern[]>
+--- Splits the predicates in query patterns into guards and directives.
+---@param patterns table<integer, Predicate[]>
 ---@return table<integer, ProcessedPattern>
 local function process_patterns(patterns)
   ---@type table<integer, ProcessedPattern>
   local processed_patterns = {}
 
-  for k, pattern_list in pairs(patterns) do
-    ---@type ProcessedPredicate[]
-    local predicates = {}
+  for k, pattern in pairs(patterns) do
+    ---@type ProcessedGuard[]
+    local guards = {}
     ---@type ProcessedDirective[]
     local directives = {}
 
-    for _, pattern in ipairs(pattern_list) do
+    for _, pred in ipairs(pattern) do
       -- Note: tree-sitter strips the leading # from predicates for us.
-      local pred_name = pattern[1]
+      local pred_name = pred[1]
       ---@cast pred_name string
 
       if is_directive(pred_name) then
-        table.insert(directives, pattern)
+        table.insert(directives, pred)
       else
         local should_match = true
         if pred_name:match('^not%-') then
           pred_name = pred_name:sub(5)
           should_match = false
         end
-        table.insert(predicates, { pred_name, should_match, pattern })
+        table.insert(guards, { pred_name, should_match, pred })
       end
     end
 
-    processed_patterns[k] = { preds = predicates, directives = directives }
+    processed_patterns[k] = { guards = guards, directives = directives }
   end
 
   return processed_patterns
@@ -61,7 +64,7 @@ end
 ---@class vim.treesitter.Query
 ---@field lang string name of the language for this parser
 ---@field captures string[] list of (unique) capture names defined in query
----@field info vim.treesitter.QueryInfo contains information used in the query (e.g. captures, predicates, directives)
+---@field info vim.treesitter.QueryInfo contains information used in the query (e.g. captures, predicates)
 ---@field query TSQuery userdata query object
 ---@field processed_patterns table<integer, ProcessedPattern>
 local Query = {}
@@ -93,12 +96,9 @@ end
 ---List of (unique) capture names defined in query.
 ---@field captures string[]
 ---
----Contains information about predicates and directives.
----Key is pattern id, and value is list of predicates or directives defined in the pattern.
----A predicate or directive is a list of (integer|string); integer represents `capture_id`, and
----string represents (literal) arguments to predicate/directive. See |treesitter-predicates|
----and |treesitter-directives| for more details.
----@field patterns table<integer, (integer|string)[][]>
+---Contains information about predicates.
+---Key is pattern id, and value is list of predicates defined in the pattern.
+---@field patterns table<integer, Predicate[]>
 
 ---@param files string[]
 ---@return string[]
@@ -309,7 +309,7 @@ end)
 ---
 --- These functions contain the implementations for each predicate, correctly
 --- handling the "any" vs "all" semantics. They are called from the
---- predicate_handlers table with the appropriate arguments for each predicate.
+--- guard_handlers table with the appropriate arguments for each predicate.
 local impl = {
   --- @param match table<integer,TSNode[]>
   --- @param source integer|string
@@ -441,7 +441,7 @@ local impl = {
 -- Predicate handler receive the following arguments
 -- (match, pattern, bufnr, predicate)
 ---@type table<string,TSPredicate>
-local predicate_handlers = {
+local guard_handlers = {
   ['eq?'] = function(match, _, source, predicate)
     return impl['eq'](match, source, predicate, false)
   end,
@@ -532,8 +532,8 @@ local predicate_handlers = {
 }
 
 -- As we provide lua-match? also expose vim-match?
-predicate_handlers['vim-match?'] = predicate_handlers['match?']
-predicate_handlers['any-vim-match?'] = predicate_handlers['any-match?']
+guard_handlers['vim-match?'] = guard_handlers['match?']
+guard_handlers['any-vim-match?'] = guard_handlers['any-match?']
 
 ---@nodoc
 ---@class vim.treesitter.query.TSMetadata
@@ -719,12 +719,12 @@ function M.add_predicate(name, handler, opts)
 
   opts = opts or {}
 
-  if predicate_handlers[name] and not opts.force then
+  if guard_handlers[name] and not opts.force then
     error(string.format('Overriding existing predicate %s', name))
   end
 
   if opts.all ~= false then
-    predicate_handlers[name] = handler
+    guard_handlers[name] = handler
   else
     --- @param match table<integer, TSNode[]>
     local function wrapper(match, ...)
@@ -736,7 +736,7 @@ function M.add_predicate(name, handler, opts)
       end
       return handler(m, ...)
     end
-    predicate_handlers[name] = wrapper
+    guard_handlers[name] = wrapper
   end
 end
 
@@ -790,32 +790,27 @@ end
 --- Lists the currently available predicates to use in queries.
 ---@return string[] : Supported predicates.
 function M.list_predicates()
-  return vim.tbl_keys(predicate_handlers)
+  return vim.tbl_keys(guard_handlers)
 end
 
 ---@private
----@param preds ProcessedPredicate[]
+---@param pattern_i integer
+---@param guards ProcessedGuard[]
 ---@param match TSQueryMatch
 ---@param source integer|string
-function Query:match_preds(preds, pattern_i, captures, source)
-  for _, pred in ipairs(preds) do
-    -- Here we only want to return if a predicate DOES NOT match, and
-    -- continue on the other case. This way unknown predicates will not be considered,
-    -- which allows some testing and easier user extensibility (#12173).
+function Query:match_guards(pattern_i, guards, captures, source)
+  for _, guard in ipairs(guards) do
+    local handler_name = guard[1]
+    local should_match = guard[2]
+    local predicate = guard[3]
 
-    local processed_name = pred[1]
-    local should_match = pred[2]
-    local pattern = pred[3]
-
-    local handler = predicate_handlers[processed_name]
-
+    local handler = guard_handlers[handler_name]
     if not handler then
-      error(string.format('No handler for %s', pattern[1]))
+      error(string.format('No handler for %s', predicate[1]))
       return false
     end
 
-    local pred_matches = handler(captures, pattern_i, source, pattern)
-
+    local pred_matches = handler(captures, pattern_i, source, predicate)
     if pred_matches ~= should_match then
       return false
     end
@@ -824,16 +819,16 @@ function Query:match_preds(preds, pattern_i, captures, source)
 end
 
 ---@private
+---@param pattern_i integer
 ---@param directives ProcessedDirective[]
 ---@param match TSQueryMatch
 ---@return vim.treesitter.query.TSMetadata metadata
-function Query:apply_directives(directives, pattern_i, captures, source)
+function Query:apply_directives(pattern_i, directives, captures, source)
   ---@type vim.treesitter.query.TSMetadata
   local metadata = {}
 
   for _, directive in pairs(directives) do
     local handler = directive_handlers[directive[1]]
-
     if not handler then
       error(string.format('No handler for %s', directive[1]))
     end
@@ -916,7 +911,7 @@ function Query:iter_captures(node, source, start, stop)
       return
     end
 
-    local match_id, pattern = match:info()
+    local match_id, pattern_i = match:info()
 
     --- @type vim.treesitter.query.TSMetadata
     local metadata
@@ -927,11 +922,11 @@ function Query:iter_captures(node, source, start, stop)
     if not metadata then
       metadata = {}
 
-      local processed_pattern = self.processed_patterns[pattern]
+      local processed_pattern = self.processed_patterns[pattern_i]
       if processed_pattern then
         local captures = match:captures()
 
-        if not self:match_preds(processed_pattern.preds, pattern, captures, source) then
+        if not self:match_guards(pattern_i, processed_pattern.guards, captures, source) then
           cursor:remove_match(match_id)
           if end_line and captured_node:range() > end_line then
             return nil, captured_node, nil, nil
@@ -939,7 +934,7 @@ function Query:iter_captures(node, source, start, stop)
           return iter(end_line) -- tail call: try next match
         end
 
-        metadata = self:apply_directives(processed_pattern.directives, pattern, captures, source)
+        metadata = self:apply_directives(pattern_i, processed_pattern.directives, captures, source)
       end
 
       highest_cached_match_id = math.max(highest_cached_match_id, match_id)
@@ -1007,18 +1002,18 @@ function Query:iter_matches(node, source, start, stop, opts)
       return
     end
 
-    local match_id, pattern = match:info()
-    local processed_pattern = self.processed_patterns[pattern]
+    local match_id, pattern_i = match:info()
+    local processed_pattern = self.processed_patterns[pattern_i]
     local captures = match:captures()
 
     --- @type vim.treesitter.query.TSMetadata
     local metadata = {}
     if processed_pattern then
-      if not self:match_preds(processed_pattern.preds, pattern, captures, source) then
+      if not self:match_guards(pattern_i, processed_pattern.guards, captures, source) then
         cursor:remove_match(match_id)
         return iter() -- tail call: try next match
       end
-      metadata = self:apply_directives(processed_pattern.directives, pattern, captures, source)
+      metadata = self:apply_directives(pattern_i, processed_pattern.directives, captures, source)
     end
 
     if opts.all == false then
@@ -1029,11 +1024,11 @@ function Query:iter_matches(node, source, start, stop, opts)
       for k, v in pairs(captures or {}) do
         old_match[k] = v[#v]
       end
-      return pattern, old_match, metadata
+      return pattern_i, old_match, metadata
     end
 
     -- TODO(lewis6991): create a new function that returns {match, metadata}
-    return pattern, captures, metadata
+    return pattern_i, captures, metadata
   end
   return iter
 end
@@ -1054,7 +1049,7 @@ end
 --- Use |treesitter-parsers| in runtimepath to check the query file in {buf} for errors:
 ---
 ---   - verify that used nodes are valid identifiers in the grammar.
----   - verify that predicates and directives are valid.
+---   - verify that guards and directives are valid.
 ---   - verify that top-level s-expressions are valid.
 ---
 --- The found diagnostics are reported using |diagnostic-api|.

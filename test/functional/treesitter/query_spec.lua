@@ -835,11 +835,11 @@ void ui_refresh(void)
 
       local result = exec_lua(function()
         local query0 = vim.treesitter.query.parse('c', query)
-        local match_preds = query0.match_preds
+        local match_guards = query0.match_guards
         local called = 0
-        function query0:match_preds(...)
+        function query0:match_guards(...)
           called = called + 1
-          return match_preds(self, ...)
+          return match_guards(self, ...)
         end
         local parser = vim.treesitter.get_parser(0, 'c')
         local root = parser:parse()[1]:root()
