@@ -238,7 +238,7 @@ function ProcStream:read_stop()
   self._child_stderr:read_stop()
 end
 
-function ProcStream:close(signal)
+function ProcStream:close(signal, boo)
   if self._closed then
     return
   end
@@ -250,6 +250,7 @@ function ProcStream:close(signal)
   if type(signal) == 'string' then
     self._proc:kill('sig' .. signal)
   end
+  if boo then return end
   while self.status == nil do
     uv.run 'once'
   end

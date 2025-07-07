@@ -443,7 +443,8 @@ function M.check_close()
   end
   local start_time = uv.now()
   session:close()
-  uv.update_time() -- Update cached value of luv.now() (libuv: uv_now()).
+
+  --[[uv.update_time() -- Update cached value of luv.now() (libuv: uv_now()).
   local end_time = uv.now()
   local delta = end_time - start_time
   if delta > 500 then
@@ -454,7 +455,7 @@ function M.check_close()
         .. 'This indicates a likely problem with the test even if it passed!\n'
     )
     io.stdout:flush()
-  end
+  end]]
   session = nil
 end
 

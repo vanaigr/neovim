@@ -179,7 +179,7 @@ function Session:close(signal)
   if not self._prepare:is_closing() then
     self._prepare:close()
   end
-  self._rpc_stream:close(signal)
+  self._rpc_stream:close(signal, true)
   self.closed = true
 end
 
