@@ -172,15 +172,19 @@ function Session:stop()
   uv.stop()
 end
 
-function Session:close(signal)
+function Session:close(signal, callback)
+  if self.closed then
+    return
+  end
+  self.closed = true
+
   if not self._timer:is_closing() then
     self._timer:close()
   end
   if not self._prepare:is_closing() then
     self._prepare:close()
   end
-  self._rpc_stream:close(signal)
-  self.closed = true
+  self._rpc_stream:close(signal, callback)
 end
 
 --- Sends a request to the RPC endpoint, without blocking (schedules a coroutine).

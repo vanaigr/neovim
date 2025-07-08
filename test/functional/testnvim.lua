@@ -437,23 +437,39 @@ local function remove_args(args, args_rm)
   return new_args
 end
 
+local count = 0
+local total_time = { 0 }
+_G.total_time = total_time
+
 function M.check_close()
   if not session then
     return
   end
   local start_time = uv.now()
-  session:close()
-  uv.update_time() -- Update cached value of luv.now() (libuv: uv_now()).
-  local end_time = uv.now()
-  local delta = end_time - start_time
-  if delta > 500 then
-    print(
-      'nvim took '
-        .. delta
-        .. ' milliseconds to exit after last test\n'
-        .. 'This indicates a likely problem with the test even if it passed!\n'
-    )
-    io.stdout:flush()
+  session:close(nil, function()
+    uv.update_time() -- Update cached value of luv.now() (libuv: uv_now()).
+    local end_time = uv.now()
+    if count < 10 then
+      print('Duration 1: ', end_time - start_time)
+    end
+    local delta = end_time - start_time
+    if delta > 500 then
+      print(
+        'nvim took '
+          .. delta
+          .. ' milliseconds to exit after last test\n'
+          .. 'This indicates a likely problem with the test even if it passed!\n'
+      )
+      io.stdout:flush()
+    end
+  end)
+  uv.update_time()
+  local end_time_2 = uv.now()
+  total_time[1] = total_time[1] + (end_time_2 - start_time)
+
+  if count < 10 then
+    count = count + 1
+    print('Duration 2: ', end_time_2 - start_time)
   end
   session = nil
 end

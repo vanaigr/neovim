@@ -9,7 +9,7 @@ local uv = vim.uv
 --- @field write fun(self, data: string|string[])
 --- @field read_start fun(self, cb: fun(chunk: string))
 --- @field read_stop fun(self)
---- @field close fun(self, signal?: string)
+--- @field close fun(self, signal?: string, cb?: fun())
 
 --- Stream over given pipes.
 ---
@@ -47,9 +47,12 @@ function StdioStream:read_stop()
   self._in:read_stop()
 end
 
-function StdioStream:close()
+function StdioStream:close(_, cb)
   self._in:close()
   self._out:close()
+  if cb then
+    cb()
+  end
 end
 
 --- Stream over a named pipe or TCP socket.
@@ -114,8 +117,11 @@ function SocketStream:read_stop()
   uv.read_stop(self._socket)
 end
 
-function SocketStream:close()
+function SocketStream:close(_, cb)
   uv.close(self._socket)
+  if cb then
+    cb()
+  end
 end
 
 --- Stream over child process stdio.
@@ -126,6 +132,7 @@ end
 --- @field private _child_stdin uv.uv_pipe_t
 --- @field private _child_stdout uv.uv_pipe_t
 --- @field private _child_stderr uv.uv_pipe_t
+--- @field private _close_callbacks fun()[]
 --- Collects stdout (if `collect_text=true`). Treats data as text (CRLF converted to LF).
 --- @field stdout string
 --- Collects stderr as raw data.
@@ -165,6 +172,7 @@ function ProcStream.spawn(argv, env, io_extra)
     _child_stdout = assert(uv.new_pipe(false)),
     _child_stderr = assert(uv.new_pipe(false)),
     _exiting = false,
+    _close_callbacks = {},
   }, ProcStream)
   local prog = argv[1]
   local args = {} --- @type string[]
@@ -181,6 +189,9 @@ function ProcStream.spawn(argv, env, io_extra)
     self.signal = signal
     -- "Abort" exit may not set status; force to nonzero in that case.
     self.status = (0 ~= (status or 0) or 0 == (signal or 0)) and status or (128 + (signal or 0))
+    for _, cb in ipairs(self._close_callbacks) do
+      cb()
+    end
   end)
 
   if not self._proc then
@@ -238,7 +249,7 @@ function ProcStream:read_stop()
   self._child_stderr:read_stop()
 end
 
-function ProcStream:close(signal)
+function ProcStream:close(signal, cb)
   if self._closed then
     return
   end
@@ -250,10 +261,18 @@ function ProcStream:close(signal)
   if type(signal) == 'string' then
     self._proc:kill('sig' .. signal)
   end
-  while self.status == nil do
-    uv.run 'once'
+  if cb then
+    if self.status == nil then
+      cb()
+    else
+      table.insert(self._close_callbacks, cb)
+    end
+  else
+    while self.status == nil do
+      uv.run 'once'
+    end
+    return self.status, self.signal
   end
-  return self.status, self.signal
 end
 
 return {

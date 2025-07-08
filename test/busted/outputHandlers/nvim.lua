@@ -238,6 +238,7 @@ return function(options)
     if failureCount > 0 or errorCount > 0 then
       io.write(t_global.read_nvim_log(nil, true))
     end
+    io.write('Total shutdown time: ' .. _G.total_time[1] .. ' ms')
     io.flush()
 
     return nil, true
@@ -257,6 +258,7 @@ return function(options)
     io.write(
       fileEndString:format(fileTestCount, tests, vim.fs.normalize(file.name), elapsedTime_ms)
     )
+    io.write('Total shutdown time: ' .. _G.total_time[1] .. ' ms')
     io.flush()
     return nil, true
   end
